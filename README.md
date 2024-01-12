@@ -1,0 +1,1 @@
+# Pratical_RAG_Project
