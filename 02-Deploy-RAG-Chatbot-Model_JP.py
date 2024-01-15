@@ -228,7 +228,8 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
         answers = []
         for question in model_input:
           #Build the prompt
-          prompt = "[INST] <<SYS>>あなたはエアコンメーカーのコールセンターアシスタントです。あなたはエアコン製品に関する仕様、機能、トラブルシューティングなどの質問に回答します。"
+          # prompt = "[INST] <<SYS>>あなたはエアコンメーカーのコールセンターアシスタントです。あなたはエアコン製品に関する仕様、機能、トラブルシューティングなどの質問に回答します。"
+          prompt = "[INST] <<SYS>>【参考情報】を元に、【ユーザーからの質問】にできるだけ正確に答えてください。なお、【参考情報】をそのまま出力するのではなく、ユーザーからの質問に沿う形へと適切に微調整してから出力してください。わからない場合や、質問が適切でない場合、有益な参考情報が無い場合は、そのように答えてください。<</SYS>>\n\n 【参考情報】: "
           
           docs = self.find_relevant_doc(question)
 
@@ -238,10 +239,11 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
 
           #Add docs from our knowledge base to the prompt
           if len(docs) > 0:
-            prompt += f"\n\n 以下は、回答の役に立つかもしれない参考情報です。: \n\n{ref_info}"
+            prompt += f"\n\n{ref_info}"
 
           #Final instructions
-          prompt += f"\n\n <</SYS>>参考情報を参照しながら以下の【質問】に答えてください。なお、参考情報をそのまま出力するのではなく、ユーザーからの質問に沿う形に微調整してから出力してください。わからない場合や、質問が適切でない場合、有益な参考情報が無い場合は、そのように答えてください。詳細な回答のみしてください。メモやコメントは不要です。\n\n  【質問】: {question}[/INST]"
+          # prompt += f"\n\n <</SYS>>参考情報を参照しながら以下の【質問】に答えてください。なお、参考情報をそのまま出力するのではなく、ユーザーからの質問に沿う形に微調整してから出力してください。わからない場合や、質問が適切でない場合、有益な参考情報が無い場合は、そのように答えてください。詳細な回答のみしてください。メモやコメントは不要です。\n\n  【質問】: {question}[/INST]"
+          prompt += f"\n\n  【ユーザーからの質問】: {question}[/INST]"
 
           response = self.chat_model.predict(prompt)
 
@@ -350,7 +352,7 @@ answer = requests.post(
   json={
     "dataframe_split": {
       "columns": [      
-        "最もコスパが良い製品を、具体的な根拠も含めて教えて"    
+        "8畳間の和室に適した製品はどれ？その根拠も一緒に教えて。"    
       ],    
       "data": [  ]  
     }
