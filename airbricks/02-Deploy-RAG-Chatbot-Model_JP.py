@@ -1,7 +1,7 @@
 # Databricks notebook source
 # MAGIC %md 
 # MAGIC ### 環境
-# MAGIC - Runtime: 14.2 ML GPU
+# MAGIC - Runtime: 14.2 ML
 # MAGIC - Node type: i3.2xlarge (Single Node)
 
 # COMMAND ----------
@@ -38,8 +38,7 @@
 
 # COMMAND ----------
 
-# DBTITLE 1,必要な外部ライブラリのインストール 
-# MAGIC %pip install mlflow==2.9.0 langchain==0.0.344 databricks-vectorsearch==0.22 databricks-sdk==0.12.0 mlflow[databricks] databricks-sql-connector
+# MAGIC %pip install mlflow==2.9.0 databricks-vectorsearch==0.22 databricks-sdk==0.12.0 mlflow[databricks] langchain==0.1.3 openai==1.9.0 langchain_openai
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -119,6 +118,7 @@ os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get(databricks_token_secrets_sc
 
 host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 os.environ['DATABRICKS_HOST'] = host
+os.environ["OPENAI_TOKEN"] = dbutils.secrets.get(databricks_openai_secrets_scope, databricks_openai_secrets_key)
 
 print(host)
 print(os.environ['DATABRICKS_TOKEN'])
@@ -154,7 +154,7 @@ chat_model = ChatDatabricks(
   max_tokens = 2000, 
   temprature = 0.1)
 
-print(f"Test chat model: {chat_model.predict('リビングが３０平米なのですが、どの製品がベスト？')}")
+print(f"Test chat model: {chat_model.invoke('リビングが３０平米なのですが、どの製品がベスト？')}")
 
 # COMMAND ----------
 
@@ -174,22 +174,6 @@ print(f"Test chat model: {chat_model.predict('リビングが３０平米なの�
 
 # COMMAND ----------
 
-from databricks import sql
-import os
-
-with sql.connect(server_hostname = "e2-demo-field-eng.cloud.databricks.com",
-                 http_path       = "/sql/1.0/warehouses/9cb4663f60934ffd",
-                 access_token    = "dapi75af9658cc7c67d859328459b45119ea") as connection:
-
-  with connection.cursor() as cursor:
-    cursor.execute('SELECT * FROM hiroshi.rag_chatbot.user_info WHERE id = "111"')
-    result = cursor.fetchall()
-
-    for row in result:
-      print(row['name'])
-
-# COMMAND ----------
-
 import mlflow
 from mlflow.pyfunc import PythonModel
 from typing import Dict
@@ -200,8 +184,9 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
         from databricks.vector_search.client import VectorSearchClient
         import mlflow.deployments
         from langchain.chat_models import ChatDatabricks
-        from databricks import sql
         import os
+        from langchain_openai import OpenAI
+        from langchain_openai import ChatOpenAI
 
         #Get the vector search index
         vsc = VectorSearchClient(
@@ -217,7 +202,9 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
 
         # Get the client for instruct endpoint
         self.chat_model = ChatDatabricks(endpoint=instruct_endpoint_name, max_tokens = 2000)
-        
+
+        self.format_instructions, self.output_parser = self.create_format_instructions()
+
     #Send a request to our Vector Search Index to retrieve similar content.
     def find_relevant_doc(self, question, num_results = 10, relevant_threshold = 0.7):
 
@@ -228,9 +215,8 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
 
         results = self.vs_index.similarity_search(
             query_vector=embeddings[0],
-            columns=["usertype", "query", "response"],
-            num_results=num_results,
-            filters={"usertype": ("general", "silver")})
+            columns=["query", "response"],
+            num_results=num_results)
         
         docs = results.get('result', {}).get('data_array', [])
         #Filter on the relevancy score. Below 0.7 means we don't have good relevant content
@@ -238,70 +224,105 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
         returned_docs = []
         for doc in docs:
           if doc[-1] > relevant_threshold:
-            returned_docs.append({"query": doc[1], "response": doc[2]})
+            returned_docs.append({"query": doc[0], "response": doc[1]})
         # if len(docs) > 0 and docs[0][-1] > relevant_threshold :
         #   return {"query": docs[0][0], "response": docs[0][1]}
         return returned_docs
+      
+    def create_format_instructions(self):
+      from langchain.output_parsers import StructuredOutputParser, ResponseSchema
+      
+      # 応答の型を定義する
+      response_schemas = [
+          ResponseSchema(name="domain_specific", type="boolean", description="質問が特定の企業の製品などのドメイン固有な内容を問うている場合はtrue、一般的な内容を問うている場合はfalse。"),
+          # ResponseSchema(name="response", description="回答")
+      ]
 
+      # OutputParserを用意する（定義した型を渡す）
+      output_parser = StructuredOutputParser.from_response_schemas(response_schemas)
+
+      # OutputParserからフォーマット命令を作成する
+      format_instructions = output_parser.get_format_instructions()
+
+      return format_instructions, output_parser
+
+    def create_prompt(self, question: str, classification=False):
+      from langchain.prompts import (
+          ChatPromptTemplate,
+          SystemMessagePromptTemplate,
+          HumanMessagePromptTemplate
+      )
+      # プロンプトを準備する
+      if classification:
+        # format_instructions, output_parser = self.create_format_instructions()
+        question = f"{question}\n" + self.format_instructions
+        system_template="あなたは、エアコンに関する一般的な知識を豊富に持っている専門家です。質問者からの質問が特定の企業の製品などのドメイン固有な内容なのか、一般的な内容なのか判断してください。"
+        human_template="質問者：{question}"
+      else:
+        system_template="あなたは、質問者からの質問を{language}で回答するAIです。ただし、質問に特定の製品やサービスなどドメイン固有の内容が含まれている場合や、回答するのが難しい場合は、「わかりません」と一言答えてください。"
+        human_template="質問者：{question}"
+
+      system_message_prompt = SystemMessagePromptTemplate.from_template(system_template)
+      human_message_prompt = HumanMessagePromptTemplate.from_template(human_template)
+
+      chat_prompt = ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
+
+      prompt_message_list = chat_prompt.format_prompt(language="日本語", question=question).to_messages()
+      return prompt_message_list
+
+    def is_domein_specific_question(self, question):
+      prompt = self.create_prompt(question, classification=True)
+
+      OPENAI_API_KEY=os.environ["OPENAI_TOKEN"]
+      from langchain_openai import ChatOpenAI
+      chat = ChatOpenAI(model_name="gpt-4", openai_api_key=OPENAI_API_KEY)
+      answer = chat(prompt)
+
+      # 出力をパースする
+      result = self.output_parser.parse(answer.content)
+
+      return result['domain_specific']
+      
     def predict(self, context, model_input):
-        print(model_input)
-        print(model_input['id'])
-        print(model_input['query'])
-        print(type(model_input))
-        # userId = model_input['id']
-        userId = model_input['id'][0]
-        with sql.connect(
-          server_hostname = "e2-demo-field-eng.cloud.databricks.com",
-          http_path       = "/sql/1.0/warehouses/9cb4663f60934ffd",
-          access_token    = os.environ["DATABRICKS_TOKEN"]) as db_connection:
-          with db_connection.cursor() as cursor:
-            sql_txt = f'SELECT * FROM hiroshi.rag_chatbot.user_info WHERE id = "{userId}"'
-            cursor.execute(sql_txt)
-            result = cursor.fetchall()
-            print(sql_txt)
-            print(result)
-
-            name = result[0]['name']
-            rank = result[0]['type']
-            birthday = result[0]['birthday']
-            since = result[0]['since']
 
         answers = []
-        # for question in model_input["query"]:
-        # question = model_input["query"]
         question = model_input['query'][0]
-        #Build the prompt
-        # prompt = "[INST] <<SYS>>あなたはエアコンメーカーのコールセンターアシスタントです。あなたはエアコン製品に関する仕様、機能、トラブルシューティングなどの質問に回答します。"
-        prompt = "[INST] <<SYS>>【ユーザー情報】と【参考情報】のみを参考にしながら【質問】にできるだけ正確に答えてください。わからない場合や、質問が適切でない場合は、分からない旨を答えてください。<</SYS>>\n\n 【ユーザー情報】\n"
-        
-        prompt += f"名前：{name}\nランク：{rank}\n生年月日：{birthday}\n入会日：{since}\n\n\n【参考情報】"
-        
-        docs = self.find_relevant_doc(question)
+        if self.is_domein_specific_question(question):
+            #Build the prompt
+            prompt = "[INST] <<SYS>>あなたはエアコンメーカーのコールセンターアシスタントです。【参考情報】のみを参考にしながら【質問】にできるだけ正確に答えてください。<</SYS>>\n\n\n【参考情報】"
+            
+            docs = self.find_relevant_doc(question)
 
-        ref_info = ""
-        for doc in docs:
-          ref_info = ref_info + doc['response'] + "\n\n"
+            ref_info = ""
+            for doc in docs:
+              ref_info = ref_info + doc['response'] + "\n\n"
 
-        #Add docs from our knowledge base to the prompt
-        if len(docs) > 0:
-          prompt += f"\n\n{ref_info}"
+            #Add docs from our knowledge base to the prompt
+            if len(docs) > 0:
+              prompt += f"\n\n{ref_info}"
 
-        #Final instructions
-        # prompt += f"\n\n <</SYS>>参考情報を参照しながら以下の【質問】に答えてください。なお、参考情報をそのまま出力するのではなく、ユーザーからの質問に沿う形に微調整してから出力してください。わからない場合や、質問が適切でない場合、有益な参考情報が無い場合は、そのように答えてください。詳細な回答のみしてください。メモやコメントは不要です。\n\n  【質問】: {question}[/INST]"
-        prompt += f"\n\n  【質問】\n{question}[/INST]"
+            #Final instructions
+            prompt += f"\n\n  【質問】\n{question}[/INST]"
 
-        response = self.chat_model.predict(prompt)
+            answer = self.chat_model.invoke(prompt)
+            response = "[OSS LLM] " + answer.content
+        else:
+            OPENAI_API_KEY=os.environ["OPENAI_TOKEN"]
+            from langchain_openai import ChatOpenAI
+            chat = ChatOpenAI(model_name="gpt-3.5-turbo", openai_api_key=OPENAI_API_KEY)
+            prompt = self.create_prompt(question)
+            answer = chat(prompt)
+            response = "[OpenAI] " + answer.content
 
-        answers.append({"answer": response, "prompt": prompt})
+        answers.append({"answer": response})
         return answers
 
 # COMMAND ----------
 
-# question = "現在のランクを維持するためにはどういった条件が必要？"
-question = "私の現在のランクには空港ラウンジ特典はついていますか？"
+question = "エアコンを買い換えるタイミングの判断基準は何ですか？"
 
 proxy_model = ChatbotRAGOrchestratorApp()
-results = proxy_model.predict(None, {"id": "222", "query": question})
+results = proxy_model.predict(None, {"query": [question]})
 print(results[0]["answer"])
 
 # COMMAND ----------
@@ -322,21 +343,24 @@ with mlflow.start_run(run_name="chatbot_rag_ja") as run:
     chatbot = ChatbotRAGOrchestratorApp()
     
     #Let's try our model calling our Gateway API: 
-    signature = infer_signature({"id": "222", "query": question}, results)
+    input_example = {"query": [question]}
+    signature = infer_signature(input_example, results)
 
     mlflow.pyfunc.log_model(
       artifact_path="model", 
       python_model=chatbot, 
       signature=signature, 
       registered_model_name=model_name,
-      input_example={"id": "222", "query": question},
+      input_example=input_example,
       pip_requirements=[
             "mlflow==2.9.0",
-            "langchain==0.0.344",
+            # "langchain==0.0.344",
             "databricks-vectorsearch==0.22",
             "databricks-sdk==0.12.0",
             "mlflow[databricks]",
-            "databricks-sql-connector"]
+            "langchain==0.1.3", 
+            "openai==1.9.0", 
+            "langchain_openai"]
     ) 
 print(run.info.run_id)
 
@@ -346,7 +370,6 @@ from mlflow import MlflowClient
 
 client = MlflowClient()
 
-# Choose the right model version registered in the above cell.
 client.set_registered_model_alias(name=model_name, alias="Champion", version=get_latest_model_version(model_name))
 
 # COMMAND ----------
@@ -357,7 +380,8 @@ loaded_model = mlflow.pyfunc.load_model(f"models:/{model_name}@Champion")
 
 # Make a prediction using the loaded model
 answer = loaded_model.predict(
-    {"id": "111", "query": "私の現在のランクには空港ラウンジ特典はついていますか？"}
+    # {"query": "Zenith ZR-450のタッチスクリーン操作パネルの反応が鈍いです。どうしたら良いですか？"}
+    {"query": "エアコンの一般的な耐用年数を教えて"}
 )
 
 print(answer)
@@ -377,7 +401,7 @@ print(answer)
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedModelInput
 
-serving_endpoint_name = f"tmp_japan_demo_rag_endpoint_{catalog}_{db}"[:63]
+serving_endpoint_name = f"airbricks_demo_rag_endpoint_{catalog}_{db}"[:63]
 latest_model_version = get_latest_model_version(model_name)
 
 w = WorkspaceClient()
@@ -391,7 +415,8 @@ endpoint_config = EndpointCoreConfigInput(
             scale_to_zero_enabled=True,
             environment_vars={
                 "DATABRICKS_TOKEN": "{{secrets/"+databricks_token_secrets_scope+"/"+databricks_token_secrets_key+"}}",
-                "DATABRICKS_HOST": "{{secrets/"+databricks_host_secrets_scope+"/"+databricks_host_secrets_key+"}}"
+                "DATABRICKS_HOST": "{{secrets/"+databricks_host_secrets_scope+"/"+databricks_host_secrets_key+"}}",
+                "OPENAI_TOKEN": "{{secrets/"+databricks_openai_secrets_scope+"/"+databricks_openai_secrets_key+"}}"
             }
         )
     ]
@@ -421,18 +446,9 @@ displayHTML(f'Your Model Endpoint Serving is now available. Open the <a href="/m
 
 answer = requests.post(
   f"{host}/serving-endpoints/{serving_endpoint_name}/invocations", 
-  # json={
-  #   "dataframe_split": {
-  #     "columns": [      
-  #       "8畳間の和室に適した製品はどれ？その根拠も一緒に教えて。"    
-  #     ],    
-  #     "data": [  ]  
-  #   }
-  # }, 
   json={
     "inputs": { 
-        "id": ["222"], 
-        "query": ["私の現在のランクには空港ラウンジ特典はついていますか？"] 
+        "query": ["8畳間の和室に適した製品はどれ？その根拠も一緒に教えて。"] 
     }
   },
   headers={
@@ -491,3 +507,7 @@ print(answer['predictions'][0]['answer'])
 
 # /!\ THIS WILL DROP YOUR DEMO SCHEMA ENTIRELY /!\ 
 # cleanup_demo(catalog, db, serving_endpoint_name, f"{catalog}.{db}.databricks_documentation_vs_index")
+
+# COMMAND ----------
+
+
