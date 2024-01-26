@@ -5,14 +5,16 @@
 # COMMAND ----------
 
 catalog = "japan_practical_demo"
-dbName = "genie_demo"
+dbName = "dollyfoodsholdings"
 volume = "raw_data"
 raw_data_table_name = "sales_result"
+company_table_name = "company_info"
 
-print('catalog =',catalog)
-print('dbName =',dbName)
-print('volume =',volume)
-print('raw_data_table_name =',raw_data_table_name)
+print('catalog =', catalog)
+print('dbName =', dbName)
+print('volume =', volume)
+print('raw_data_table_name =', raw_data_table_name)
+print('company_table_name =', company_table_name)
 
 # COMMAND ----------
 
@@ -80,6 +82,43 @@ comment = """グループ企業コードと会社名の対応関係は以下の�
 会計年度は原則4月から翌年3月まで。ただし、G003のみ2月から翌年1月までとする。"""
 
 spark.sql(f'COMMENT ON TABLE {raw_data_table_name} IS "{comment}"')
+
+# COMMAND ----------
+
+# Drop if table existing
+sql(f"drop table if exists {company_table_name}")
+
+# Read raw data and create delta table to store it
+raw_data_url = "https://raw.githubusercontent.com/hiouchiy/Pratical_RAG_Project/main/dollyfoodsholdings/company_master.csv"
+!wget $raw_data_url -O /tmp/company_master.csv
+
+unity_catalog_volume_path = f'/Volumes/{catalog}/{dbName}/{volume}/company_master.csv'
+!cp /tmp/company_master.csv $unity_catalog_volume_path
+
+# COMMAND ----------
+
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+from pyspark.sql import functions as F
+
+schema = StructType([ \
+    StructField("Code", StringType(),True), \
+    StructField("Year", IntegerType(),True), \
+    StructField("NumOfEmployees", IntegerType(),True), \
+    StructField("YearOfEstablishment", IntegerType(), True) \
+  ])
+
+csv_df = spark.read.format("csv").option("header", "true").schema(schema).load(unity_catalog_volume_path)
+
+display(csv_df)
+
+csv_df.write.mode('overwrite').saveAsTable(company_table_name)
+
+# COMMAND ----------
+
+sql(f"ALTER TABLE {company_table_name} ALTER COLUMN Code COMMENT 'グループ会社コード'")
+sql(f"ALTER TABLE {company_table_name} ALTER COLUMN Year COMMENT '会計年度'")
+sql(f"ALTER TABLE {company_table_name} ALTER COLUMN NumOfEmployees COMMENT '従業員数'")
+sql(f"ALTER TABLE {company_table_name} ALTER COLUMN YearOfEstablishment COMMENT '設立年'")
 
 # COMMAND ----------
 
