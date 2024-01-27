@@ -38,7 +38,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install mlflow==2.9.0 databricks-vectorsearch==0.22 databricks-sdk==0.12.0 mlflow[databricks] langchain==0.1.3 openai==1.9.0 langchain_openai
+# MAGIC %pip install mlflow==2.9.0 databricks-vectorsearch==0.22 databricks-sdk==0.12.0 mlflow[databricks] langchain==0.1.3 langchain_community==0.0.16 openai==1.9.0 langchain_openai
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -144,7 +144,8 @@ print(os.environ['DATABRICKS_TOKEN'])
 
 # DBTITLE 1,chat_modelモデルの定義（まだRAGは使用していない状態です）
 # Databricks Foundation LLMモデルのテスト
-from langchain.chat_models import ChatDatabricks
+# from langchain.chat_models import ChatDatabricks
+from langchain_community.chat_models import ChatDatabricks
 
 ##############################################
 # chat_modelモデルの定義(カスタムモデルを使用)
@@ -155,6 +156,26 @@ chat_model = ChatDatabricks(
   temprature = 0.1)
 
 print(f"Test chat model: {chat_model.invoke('リビングが３０平米なのですが、どの製品がベスト？')}")
+
+# COMMAND ----------
+
+chat_model = ChatDatabricks(
+  endpoint=sentence_classification_llm_endpoint_name, 
+  max_tokens = 2000, 
+  temprature = 0.1)
+
+answer = chat_model.invoke('リビングが３０平米なのですが、どの製品がベスト？')
+print(f"Test chat model: {answer}")
+
+# COMMAND ----------
+
+chat_model = ChatDatabricks(
+  endpoint=general_qa_llm_endpoint_name, 
+  max_tokens = 2000, 
+  temprature = 0.1)
+
+answer = chat_model.invoke('リビングが３０平米なのですが、どの製品がベスト？')
+print(f"Test chat model: {answer.content}")
 
 # COMMAND ----------
 
@@ -183,7 +204,7 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
     def __init__(self):
         from databricks.vector_search.client import VectorSearchClient
         import mlflow.deployments
-        from langchain.chat_models import ChatDatabricks
+        from langchain_community.chat_models import ChatDatabricks
         import os
         from langchain_openai import OpenAI
         from langchain_openai import ChatOpenAI
@@ -202,6 +223,8 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
 
         # Get the client for instruct endpoint
         self.chat_model = ChatDatabricks(endpoint=instruct_endpoint_name, max_tokens = 2000)
+        self.classification_model = ChatDatabricks(endpoint=sentence_classification_llm_endpoint_name, temprature=0.1)
+        self.general_qa_model = ChatDatabricks(endpoint=general_qa_llm_endpoint_name, temprature=0.1)
 
         self.format_instructions, self.output_parser = self.create_format_instructions()
 
@@ -273,10 +296,11 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
     def is_domein_specific_question(self, question):
       prompt = self.create_prompt(question, classification=True)
 
-      OPENAI_API_KEY=os.environ["OPENAI_TOKEN"]
-      from langchain_openai import ChatOpenAI
-      chat = ChatOpenAI(model_name="gpt-4", openai_api_key=OPENAI_API_KEY)
-      answer = chat(prompt)
+      # OPENAI_API_KEY=os.environ["OPENAI_TOKEN"]
+      # from langchain_openai import ChatOpenAI
+      # chat = ChatOpenAI(model_name="gpt-4", openai_api_key=OPENAI_API_KEY)
+      # answer = chat(prompt)
+      answer = self.classification_model(prompt)
 
       # 出力をパースする
       result = self.output_parser.parse(answer.content)
@@ -307,11 +331,12 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
             answer = self.chat_model.invoke(prompt)
             response = "[OSS LLM] " + answer.content
         else:
-            OPENAI_API_KEY=os.environ["OPENAI_TOKEN"]
-            from langchain_openai import ChatOpenAI
-            chat = ChatOpenAI(model_name="gpt-3.5-turbo", openai_api_key=OPENAI_API_KEY)
+            # OPENAI_API_KEY=os.environ["OPENAI_TOKEN"]
+            # from langchain_openai import ChatOpenAI
+            # chat = ChatOpenAI(model_name="gpt-3.5-turbo", openai_api_key=OPENAI_API_KEY)
             prompt = self.create_prompt(question)
-            answer = chat(prompt)
+            # answer = chat(prompt)
+            answer = self.general_qa_model(prompt)
             response = "[OpenAI] " + answer.content
 
         answers.append({"answer": response})
@@ -359,6 +384,7 @@ with mlflow.start_run(run_name="chatbot_rag_ja") as run:
             "databricks-sdk==0.12.0",
             "mlflow[databricks]",
             "langchain==0.1.3", 
+            "langchain_community==0.0.16",
             "openai==1.9.0", 
             "langchain_openai"]
     ) 
@@ -416,7 +442,7 @@ endpoint_config = EndpointCoreConfigInput(
             environment_vars={
                 "DATABRICKS_TOKEN": "{{secrets/"+databricks_token_secrets_scope+"/"+databricks_token_secrets_key+"}}",
                 "DATABRICKS_HOST": "{{secrets/"+databricks_host_secrets_scope+"/"+databricks_host_secrets_key+"}}",
-                "OPENAI_TOKEN": "{{secrets/"+databricks_openai_secrets_scope+"/"+databricks_openai_secrets_key+"}}"
+                # "OPENAI_TOKEN": "{{secrets/"+databricks_openai_secrets_scope+"/"+databricks_openai_secrets_key+"}}"
             }
         )
     ]
