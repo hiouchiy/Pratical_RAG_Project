@@ -118,7 +118,6 @@ os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get(databricks_token_secrets_sc
 
 host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 os.environ['DATABRICKS_HOST'] = host
-os.environ["OPENAI_TOKEN"] = dbutils.secrets.get(databricks_openai_secrets_scope, databricks_openai_secrets_key)
 
 print(host)
 print(os.environ['DATABRICKS_TOKEN'])
@@ -258,7 +257,6 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
       # 応答の型を定義する
       response_schemas = [
           ResponseSchema(name="domain_specific", type="boolean", description="質問が特定の企業の製品などのドメイン固有な内容を問うている場合はtrue、一般的な内容を問うている場合はfalse。"),
-          # ResponseSchema(name="response", description="回答")
       ]
 
       # OutputParserを用意する（定義した型を渡す）
@@ -275,9 +273,9 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
           SystemMessagePromptTemplate,
           HumanMessagePromptTemplate
       )
+
       # プロンプトを準備する
       if classification:
-        # format_instructions, output_parser = self.create_format_instructions()
         question = f"{question}\n" + self.format_instructions
         system_template="あなたは、エアコンに関する一般的な知識を豊富に持っている専門家です。質問者からの質問が特定の企業の製品などのドメイン固有な内容なのか、一般的な内容なのか判断してください。"
         human_template="質問者：{question}"
@@ -291,18 +289,12 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
       chat_prompt = ChatPromptTemplate.from_messages([system_message_prompt, human_message_prompt])
 
       prompt_message_list = chat_prompt.format_prompt(language="日本語", question=question).to_messages()
+
       return prompt_message_list
 
     def is_domein_specific_question(self, question):
       prompt = self.create_prompt(question, classification=True)
-
-      # OPENAI_API_KEY=os.environ["OPENAI_TOKEN"]
-      # from langchain_openai import ChatOpenAI
-      # chat = ChatOpenAI(model_name="gpt-4", openai_api_key=OPENAI_API_KEY)
-      # answer = chat(prompt)
       answer = self.classification_model(prompt)
-
-      # 出力をパースする
       result = self.output_parser.parse(answer.content)
 
       return result['domain_specific']
@@ -331,11 +323,7 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
             answer = self.chat_model.invoke(prompt)
             response = "[OSS LLM] " + answer.content
         else:
-            # OPENAI_API_KEY=os.environ["OPENAI_TOKEN"]
-            # from langchain_openai import ChatOpenAI
-            # chat = ChatOpenAI(model_name="gpt-3.5-turbo", openai_api_key=OPENAI_API_KEY)
             prompt = self.create_prompt(question)
-            # answer = chat(prompt)
             answer = self.general_qa_model(prompt)
             response = "[OpenAI] " + answer.content
 
@@ -474,7 +462,7 @@ answer = requests.post(
   f"{host}/serving-endpoints/{serving_endpoint_name}/invocations", 
   json={
     "inputs": { 
-        "query": ["8畳間の和室に適した製品はどれ？その根拠も一緒に教えて。"] 
+        "query": ["Zenith ZR-450のタッチスクリーン操作パネルの反応が鈍いです。どうしたら良いですか？"]#["8畳間の和室に適した製品はどれ？その根拠も一緒に教えて。"] 
     }
   },
   headers={
