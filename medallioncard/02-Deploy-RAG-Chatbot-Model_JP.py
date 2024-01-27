@@ -174,15 +174,15 @@ print(f"Test chat model: {chat_model.predict('Goldの特典は？')}")
 
 # COMMAND ----------
 
-os.environ["DATABRICKS_HOST_NAME"]=databricks_host_name
 os.environ["DATABRICKS_DWH_HTTP_PATH"]=databricks_dwh_http_path
 
 # COMMAND ----------
 
 from databricks import sql
 import os
+from urllib.parse import urlparse
 
-with sql.connect(server_hostname = os.environ["DATABRICKS_HOST_NAME"],
+with sql.connect(server_hostname = urlparse(os.environ["DATABRICKS_HOST"]).netloc,
                  http_path       = os.environ["DATABRICKS_DWH_HTTP_PATH"],
                  access_token    = os.environ["DATABRICKS_TOKEN"]) as connection:
 
@@ -210,7 +210,7 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
 
         #Get the vector search index
         vsc = VectorSearchClient(
-          workspace_url=f'https://{os.environ["DATABRICKS_HOST_NAME"]}', 
+          workspace_url=os.environ["DATABRICKS_HOST"], 
           personal_access_token=os.environ["DATABRICKS_TOKEN"])
         self.vs_index = vsc.get_index(
             endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME,
@@ -251,8 +251,10 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
     def predict(self, context, model_input):
         userId = model_input['id'][0]
         from databricks import sql
+        from urllib.parse import urlparse
+        domain = urlparse(os.environ["DATABRICKS_HOST"]).netloc
         with sql.connect(
-          server_hostname = os.environ["DATABRICKS_HOST_NAME"],
+          server_hostname = domain,
           http_path       = os.environ["DATABRICKS_DWH_HTTP_PATH"],
           access_token    = os.environ["DATABRICKS_TOKEN"]) as db_connection:
           with db_connection.cursor() as cursor:
@@ -387,7 +389,6 @@ endpoint_config = EndpointCoreConfigInput(
             environment_vars={
                 "DATABRICKS_TOKEN": "{{secrets/"+databricks_token_secrets_scope+"/"+databricks_token_secrets_key+"}}",
                 "DATABRICKS_HOST": "{{secrets/"+databricks_host_secrets_scope+"/"+databricks_host_secrets_key+"}}",
-                "DATABRICKS_HOST_NAME": "{{secrets/"+databricks_host_name_secrets_scope+"/"+databricks_host_name_secrets_key+"}}",
                 "DATABRICKS_DWH_HTTP_PATH": "{{secrets/"+databricks_dwh_http_path_secrets_scope+"/"+databricks_dwh_http_path_secrets_key+"}}"
             }
         )
