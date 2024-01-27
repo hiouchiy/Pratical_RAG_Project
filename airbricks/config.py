@@ -22,6 +22,8 @@ registered_model_name = "airbricks_chatbot_model"
 
 embedding_endpoint_name = "YOUR_ENDPOINT_NAME"
 instruct_endpoint_name = "YOUR_ENDPOINT_NAME"
+general_qa_llm_endpoint_name = "YOUR_ENDPOINT_NAME"
+sentence_classification_llm_endpoint_name = "YOUR_ENDPOINT_NAME"
 
 databricks_token_secrets_scope = "YOUR_SCOPE_NAME"
 databricks_token_secrets_key = "YOUR_KEY_NAME"
