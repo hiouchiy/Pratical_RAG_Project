@@ -224,7 +224,7 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
         self.chat_model = ChatDatabricks(endpoint=instruct_endpoint_name, max_tokens = 2000)
         
     #Send a request to our Vector Search Index to retrieve similar content.
-    def find_relevant_doc(self, question, num_results = 10, relevant_threshold = 0.7):
+    def find_relevant_doc(self, question, rank, num_results = 10, relevant_threshold = 0.7):
 
         response = self.deploy_client.predict(
           endpoint=embedding_endpoint_name, 
@@ -235,7 +235,7 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
             query_vector=embeddings[0],
             columns=["usertype", "query", "response"],
             num_results=num_results,
-            filters={"usertype": ("general", "silver")})
+            filters={"usertype": ("general", rank)})
         
         docs = results.get('result', {}).get('data_array', [])
         #Filter on the relevancy score. Below 0.7 means we don't have good relevant content
@@ -274,7 +274,7 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
         
         prompt += f"名前：{name}\nランク：{rank}\n生年月日：{birthday}\n入会日：{since}\n\n\n【参考情報】"
         
-        docs = self.find_relevant_doc(question)
+        docs = self.find_relevant_doc(question, rank)
 
         ref_info = ""
         for doc in docs:
