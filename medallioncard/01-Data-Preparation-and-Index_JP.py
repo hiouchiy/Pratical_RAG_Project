@@ -26,6 +26,7 @@
 # COMMAND ----------
 
 # MAGIC %pip install mlflow==2.10.1 lxml==4.9.3 transformers==4.30.2 langchain==0.1.5 databricks-vectorsearch==0.22 databricks-sdk==0.28.0 databricks-feature-store==0.17.0
+# MAGIC %pip install dspy-ai -U
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -429,6 +430,33 @@ response = client.predict(
     },
 )
 print(response['outputs'][0])
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## （おまけ）DSPyのDatabricksRMでベクトル検索
+
+# COMMAND ----------
+
+import dspy
+from dspy.retrieve.databricks_rm import DatabricksRM
+
+token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+url = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().get()
+
+retrieve = DatabricksRM( # Set up retrieval from our vector search
+            databricks_index_name=f"{catalog}.{db}.{faq_silver_table_name}_vs_index",
+            databricks_endpoint=url, 
+            databricks_token=token,
+            columns=["id", "usertype", "query", "response"],
+            text_column_name="response",
+            docs_id_column_name="id",
+            k=5
+        )
+
+# COMMAND ----------
+
+retrieve("現在の私のランクの特典を教えてください。", query_type="text")
 
 # COMMAND ----------
 
