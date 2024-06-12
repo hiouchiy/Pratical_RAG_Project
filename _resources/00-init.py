@@ -31,11 +31,11 @@ from mlflow import MlflowClient
 
 import re
 min_required_version = "11.3"
-version_tag = spark.conf.get("spark.databricks.clusterUsageTags.sparkVersion")
-version_search = re.search('^([0-9]*\.[0-9]*)', version_tag)
-assert version_search, f"The Databricks version can't be extracted from {version_tag}, shouldn't happen, please correct the regex"
-current_version = float(version_search.group(1))
-assert float(current_version) >= float(min_required_version), f'The Databricks version of the cluster must be >= {min_required_version}. Current version detected: {current_version}'
+# version_tag = spark.conf.get("spark.databricks.clusterUsageTags.sparkVersion")
+# version_search = re.search('^([0-9]*\.[0-9]*)', version_tag)
+# assert version_search, f"The Databricks version can't be extracted from {version_tag}, shouldn't happen, please correct the regex"
+# current_version = float(version_search.group(1))
+# assert float(current_version) >= float(min_required_version), f'The Databricks version of the cluster must be >= {min_required_version}. Current version detected: {current_version}'
 
 # COMMAND ----------
 

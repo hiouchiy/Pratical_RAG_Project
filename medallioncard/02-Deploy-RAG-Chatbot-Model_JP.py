@@ -1,19 +1,15 @@
 # Databricks notebook source
 # MAGIC %md 
 # MAGIC ### 環境
-# MAGIC - Runtime: 14.2 ML
-# MAGIC - Node type: i3.2xlarge (Single Node)
+# MAGIC - ノードタイプ: サーバーレス
 
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC # 2/ Creating the chatbot with Retrieval Augmented Generation (RAG)
+# MAGIC # 2/ RAGによるチャットボットの作成
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-flow-2.png?raw=true" style="float: right; margin-left: 10px"  width="900px;">
-# MAGIC
-# MAGIC ベクターサーチインデックスの準備ができました！
-# MAGIC
-# MAGIC それでは、RAGを実行するための新しいModel Serving Endpointを作成し、デプロイしてみましょう。
+# MAGIC 前のノートブックでベクターサーチインデックスと特徴量サービングの準備を行いました。
+# MAGIC このノートブックでは、RAGを実行するためのモデルサービングエンドポイントを作成し、デプロイしてみましょう。
 # MAGIC
 # MAGIC フローは次のようになります：
 # MAGIC
@@ -44,6 +40,11 @@
 
 # COMMAND ----------
 
+# MAGIC %pip install mlflow==2.10.1 langchain==0.1.5 databricks-vectorsearch==0.22 databricks-sdk==0.28.0 mlflow[databricks]
+# MAGIC dbutils.library.restartPython()
+
+# COMMAND ----------
+
 # DBTITLE 1,コンフィグ(環境に合わせて修正してください）
 # MAGIC %run ./config
 
@@ -65,9 +66,9 @@
 # MAGIC - CLIを設定します。ワークスペースのURLとプロフィールページのPATトークンが必要です。e<br>
 # MAGIC `databricks configure`
 # MAGIC - dbdemosスコープを作成します。<br/>
-# MAGIC `databricks secrets create-scope --scope dbdemos`
+# MAGIC `databricks secrets create-scope dbdemos`
 # MAGIC - サービスプリンシパルのシークレットを保存します。これはモデルエンドポイントが認証するために使われます。これがデモ/テストである場合、あなたの[PAT token](https://docs.databricks.com/en/dev-tools/auth/pat.html)を利用できます。<br>
-# MAGIC `databricks secrets put --scope dbdemos --key rag_sp_token`
+# MAGIC `databricks secrets put-secret dbdemos rag_sp_token`
 # MAGIC
 # MAGIC *Note: サービスプリンシパルがVector Searchインデックスにアクセスできることを確認してください。:*
 # MAGIC
@@ -82,57 +83,24 @@
 
 # COMMAND ----------
 
-# DBTITLE 1,Vector Searchインデックスへのアクセス権を持っていることを確認してください。
-index_name=f"{catalog}.{db}.{embed_table_name}_vs_index"
-host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
-
-test_demo_permissions(
-  host, 
-  secret_scope=databricks_token_secrets_scope, 
-  secret_key=databricks_token_secrets_key, 
-  vs_endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME, 
-  index_name=index_name, 
-  embedding_endpoint_name=None
-)
-
-# COMMAND ----------
-
-# MAGIC %md-sandbox
-# MAGIC ### Langchain リトリーバー
-# MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-model-1.png?raw=true" style="float: right" width="500px">
-# MAGIC
-# MAGIC まずはLangchain・リトリーバーを作りましょう。
-# MAGIC
-# MAGIC Langchainリトリーバーは以下のことを行います：
-# MAGIC
-# MAGIC * 入力質問のエンベッディングを作成します。 (with Databricks `bge-large-en`)
-# MAGIC * ベクトル検索インデックスを呼び出して類似文書を検索し、プロンプトを補強します。
-# MAGIC
-# MAGIC DatabricksのLangchainラッパーは、全ての基礎となるロジックとAPIコールを処理し、1ステップで簡単に実行できます。
-
-# COMMAND ----------
-
 # DBTITLE 1,モデルの認証設定
-# url used to send the request to your model from the serverless endpoint
-os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get(databricks_token_secrets_scope, databricks_token_secrets_key)
-
 host = "https://" + spark.conf.get("spark.databricks.workspaceUrl")
 os.environ['DATABRICKS_HOST'] = host
 
-print(host)
-print(os.environ['DATABRICKS_TOKEN'])
+os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get(databricks_token_secrets_scope, databricks_token_secrets_key)
+
+index_name=f"{catalog}.{db}.{embed_table_name}_vs_index"
+
+print("HOST: " + os.environ['DATABRICKS_HOST'])
+print("TOKEN: " + os.environ['DATABRICKS_TOKEN'])
+print("Vector Search Index Name: " + index_name)
 
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC ### チャットモデルの構築 （llama-2-70b-chat ファウンデーションモデルへのクエリ）
+# MAGIC ### チャットモデルの構築 （DBRX-instruct 基盤モデルへのクエリ）
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-model-3.png?raw=true" style="float: right" width="500px">
-# MAGIC
-# MAGIC 私たちのチャットボットは llama2 ファウンデーションモデルを使って回答を提供します。
-# MAGIC
-# MAGIC ビルトイン[Foundation endpoint](/ml/endpoints) (using the `/serving-endpoints/databricks-llama-2-70b-chat/invocations` API)モデルがすぐに利用可能で, Databricks Langchain Chatモデルラッパーを利用することで簡単にチェーンを構築することができます。
+# MAGIC 今回は DBRX 基盤モデルを使って回答を生成します。
 # MAGIC
 # MAGIC Note: 複数のタイプのエンドポイントやラングチェーンモデルを使用することができます：
 # MAGIC
@@ -145,6 +113,7 @@ print(os.environ['DATABRICKS_TOKEN'])
 # DBTITLE 1,chat_modelモデルの定義（まだRAGは使用していない状態です）
 # Databricks Foundation LLMモデルのテスト
 from langchain.chat_models import ChatDatabricks
+from langchain_core.messages import HumanMessage, SystemMessage
 
 ##############################################
 # chat_modelモデルの定義(カスタムモデルを使用)
@@ -154,44 +123,24 @@ chat_model = ChatDatabricks(
   max_tokens = 2000, 
   temprature = 0.1)
 
-print(f"Test chat model: {chat_model.predict('Goldの特典は？')}")
+messages = [
+    SystemMessage(content="You're a helpful assistant"),
+    HumanMessage(content="What is a mixture of experts model?"),
+]
+
+response = chat_model.invoke(messages)
+
+print(f"Test chat model: {response}")
 
 # COMMAND ----------
 
 # MAGIC %md-sandbox
 # MAGIC
-# MAGIC ### RAGチェーンの構築
+# MAGIC ### Chainオーケストレーターの構築
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-model-2.png?raw=true" style="float: right" width="600px">
+# MAGIC それでは、フロントエンドアプリから質問を取得し、FAQデータ（ベクトル検索）とカード会員マスタ（特徴量サービング）から関連情報を検索し、プロンプトを拡張するレトリーバーと、回答を作成するチャットモデルを1つのチェーンに統合しましょう。
 # MAGIC
-# MAGIC それでは、エンベッディングを取得と類似文書を検索しプロンプトを補強するレトリーバーと、回答を作成するチャットモデルを1つのLangchainチェーンに統合しましょう。
-# MAGIC
-# MAGIC 私たちは、適切な回答をするために、アシスタントにカスタムlangchainテンプレートを使用します。
-# MAGIC
-# MAGIC 時間をかけて様々なテンプレートを試し、アシスタントの口調や性格をあなたの要求に合うように調整してください。
-# MAGIC
-# MAGIC
-
-# COMMAND ----------
-
-os.environ["DATABRICKS_DWH_HTTP_PATH"]=databricks_dwh_http_path
-
-# COMMAND ----------
-
-from databricks import sql
-import os
-from urllib.parse import urlparse
-
-with sql.connect(server_hostname = urlparse(os.environ["DATABRICKS_HOST"]).netloc,
-                 http_path       = os.environ["DATABRICKS_DWH_HTTP_PATH"],
-                 access_token    = os.environ["DATABRICKS_TOKEN"]) as connection:
-
-  with connection.cursor() as cursor:
-    cursor.execute(f'SELECT * FROM {catalog}.{dbName}.{user_table_name} WHERE id = "111"')
-    result = cursor.fetchall()
-
-    for row in result:
-      print(row['name'])
+# MAGIC 必要に応じて、様々なテンプレートを試し、AIアシスタントの口調や性格を皆様の要求に合うように調整してください。
 
 # COMMAND ----------
 
@@ -202,13 +151,18 @@ from typing import Dict
 class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
 
     def __init__(self):
+        """
+        コンストラクタ
+        """
+
         from databricks.vector_search.client import VectorSearchClient
         import mlflow.deployments
         from langchain.chat_models import ChatDatabricks
+        from langchain_core.messages import SystemMessage
         from databricks import sql
         import os
 
-        #Get the vector search index
+        # ベクトル検索インデックスを取得
         vsc = VectorSearchClient(
           workspace_url=os.environ["DATABRICKS_HOST"], 
           personal_access_token=os.environ["DATABRICKS_TOKEN"])
@@ -217,87 +171,106 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
             index_name=index_name
         )
 
-        # Get the client for embedding endpoint
+        # 特徴量サービングアクセス用クライアントの取得
         self.deploy_client = mlflow.deployments.get_deploy_client("databricks")
 
-        # Get the client for instruct endpoint
+        # LLM基盤モデルのエンドポイントのクライアントを取得
         self.chat_model = ChatDatabricks(endpoint=instruct_endpoint_name, max_tokens = 2000)
-        
-    #Send a request to our Vector Search Index to retrieve similar content.
-    def find_relevant_doc(self, question, rank, num_results = 10, relevant_threshold = 0.7):
 
-        response = self.deploy_client.predict(
-          endpoint=embedding_endpoint_name, 
-          inputs={"inputs": [question]})
-        embeddings = [e for e in response.predictions]
+        # システムプロンプトを準備
+        self.SYSTEM_MESSAGE = SystemMessage(content="【ユーザー情報】と【参考情報】のみを参考にしながら【質問】にできるだけ正確に答えてください。わからない場合や、質問が適切でない場合は、分からない旨を答えてください。【参考情報】に記載されていない事実を答えるのはやめてください。")
+        
+    def _find_relevant_doc(self, question, rank, num_results = 10, relevant_threshold = 0.7):
+        """
+        ベクター検索インデックスにリクエストを送信し、類似コンテンツを検索
+        """
 
         results = self.vs_index.similarity_search(
-            query_vector=embeddings[0],
+            query_text=question,
             columns=["usertype", "query", "response"],
             num_results=num_results,
             filters={"usertype": ("general", rank)})
         
         docs = results.get('result', {}).get('data_array', [])
-        #Filter on the relevancy score. Below 0.7 means we don't have good relevant content
 
+        #関連性スコアでフィルタリングします。0.7以下は、関連性の高いコンテンツがないことを意味する
         returned_docs = []
         for doc in docs:
           if doc[-1] > relevant_threshold:
             returned_docs.append({"query": doc[1], "response": doc[2]})
-        # if len(docs) > 0 and docs[0][-1] > relevant_threshold :
-        #   return {"query": docs[0][0], "response": docs[0][1]}
+
         return returned_docs
+    
+    def _get_user_info(self, user_id):
+        """
+        カード会員マスタから当該ユーザーの属性情報を取得
+        """
 
-    def predict(self, context, model_input):
-        userId = model_input['id'][0]
-        from databricks import sql
-        from urllib.parse import urlparse
-        domain = urlparse(os.environ["DATABRICKS_HOST"]).netloc
-        with sql.connect(
-          server_hostname = domain,
-          http_path       = os.environ["DATABRICKS_DWH_HTTP_PATH"],
-          access_token    = os.environ["DATABRICKS_TOKEN"]) as db_connection:
-          with db_connection.cursor() as cursor:
-            sql_txt = f'SELECT * FROM {catalog}.{dbName}.{user_table_name} WHERE id = "{userId}"'
-            cursor.execute(sql_txt)
-            result = cursor.fetchall()
+        result = self.deploy_client.predict(
+          endpoint=user_endpoint_name,
+          inputs={"dataframe_records": [{"id": user_id}]},
+        )
+        name = result['outputs'][0]['name']
+        rank = result['outputs'][0]['type']
+        birthday = result['outputs'][0]['birthday']
+        since = result['outputs'][0]['since']
 
-            name = result[0]['name']
-            rank = result[0]['type']
-            birthday = result[0]['birthday']
-            since = result[0]['since']
+        return name, rank, birthday, since
+    
+    def _build_prompt(self, name, rank, birthday, since, docs):
+        """
+        プロンプトの構築
+        """
 
-        answers = []
-        question = model_input['query'][0]
-        #Build the prompt
-        prompt = "[INST] <<SYS>>【ユーザー情報】と【参考情報】のみを参考にしながら【質問】にできるだけ正確に答えてください。わからない場合や、質問が適切でない場合は、分からない旨を答えてください。<</SYS>>\n\n 【ユーザー情報】\n"
-        
-        prompt += f"名前：{name}\nランク：{rank}\n生年月日：{birthday}\n入会日：{since}\n\n\n【参考情報】"
-        
-        docs = self.find_relevant_doc(question, rank)
+        prompt = f"""【ユーザー情報】
+名前：{name}
+ランク：{rank}
+生年月日：{birthday}
+入会日：{since}
 
-        ref_info = ""
+
+【参考情報】
+"""
+
         for doc in docs:
-          ref_info = ref_info + doc['response'] + "\n\n"
-
-        #Add docs from our knowledge base to the prompt
-        if len(docs) > 0:
-          prompt += f"\n\n{ref_info}"
+          prompt = prompt + doc['response'] + "\n\n"
 
         #Final instructions
-        prompt += f"\n\n  【質問】\n{question}[/INST]"
+        prompt += f"\n\n 【質問】\n{question}"
 
-        response = self.chat_model.predict(prompt)
+        return prompt
 
-        answers.append({"answer": response, "prompt": prompt})
+    def predict(self, context, model_input, params=None):
+        """
+        推論メイン関数
+        """
+
+        # カード会員マスタから当該ユーザーの属性情報を取得
+        userId = model_input['id'][0]
+        name, rank, birthday, since = self._get_user_info(userId)
+
+        #ベクター検索で質問と類似している情報を検索
+        question = model_input['query'][0]
+        docs = self._find_relevant_doc(question, rank)
+
+        # プロンプトの構築
+        prompt = self._build_prompt(name, rank, birthday, since, docs)
+
+        # LLMに回答を生成させる
+        from langchain_core.messages import HumanMessage
+        query = [self.SYSTEM_MESSAGE, HumanMessage(content=prompt)]
+        response = self.chat_model.invoke(query)
+        
+        # 回答データをパッケージング
+        answers = [{"answer": response.content, "prompt": prompt}]
         return answers
 
 # COMMAND ----------
 
-question = "私の現在のランクには空港ラウンジ特典はついていますか？"
+question = "現在のランクから一つ上のランクに行くためにはどういった条件が必要ですか？"
 
 proxy_model = ChatbotRAGOrchestratorApp()
-results = proxy_model.predict(None, {"id": ["222"], "query": [question]})
+results = proxy_model.predict(None, pd.DataFrame({"id": ["111"], "query": [question]}))
 print(results[0]["answer"])
 
 # COMMAND ----------
@@ -309,31 +282,55 @@ print(results[0]["answer"])
 
 # COMMAND ----------
 
+import numpy as np
+import pandas as pd
+
+import mlflow
 from mlflow.models import infer_signature
+from mlflow.models.signature import ModelSignature
+from mlflow.types import ColSpec, DataType, ParamSchema, ParamSpec, Schema
 
 mlflow.set_registry_uri("databricks-uc")
 model_name = f"{catalog}.{db}.{registered_model_name}"
 
 with mlflow.start_run(run_name="chatbot_rag_ja") as run:
-    chatbot = ChatbotRAGOrchestratorApp()
-    
-    #Let's try our model calling our Gateway API: 
-    input_data_example = {"id": ["222"], "query": [question]}
-    signature = infer_signature(input_data_example, results)
+
+    # 入出力スキーマの定義
+    input_schema = Schema(
+      [
+        ColSpec(DataType.string, "id"),
+        ColSpec(DataType.string, "query"),
+      ]
+    )
+
+    output_schema = Schema(
+      [
+        ColSpec(DataType.string, "answer"),
+        ColSpec(DataType.string, "prompt")
+      ]
+    )
+
+    parameters = ParamSchema(
+      [
+        ParamSpec("temperature", DataType.float, np.float32(0.1), None),
+        ParamSpec("max_tokens", DataType.integer, np.int32(1000), None),
+      ]
+    )
+
+    signature = ModelSignature(inputs=input_schema, outputs=output_schema, params=parameters)
+
+    input_data_example = pd.DataFrame({"id": ["111"], "query": [question]})
 
     mlflow.pyfunc.log_model(
-      artifact_path="model", 
-      python_model=chatbot, 
+      artifact_path="medallion_rag_model", 
+      python_model=ChatbotRAGOrchestratorApp(), 
       signature=signature, 
       registered_model_name=model_name,
       input_example=input_data_example,
       pip_requirements=[
-            "mlflow==2.9.0",
-            "langchain==0.0.344",
+            "langchain==0.1.5",
             "databricks-vectorsearch==0.22",
-            "databricks-sdk==0.12.0",
-            "mlflow[databricks]",
-            "databricks-sql-connector"]
+            "databricks-sdk==0.28.0"]
     ) 
 print(run.info.run_id)
 
@@ -342,8 +339,6 @@ print(run.info.run_id)
 from mlflow import MlflowClient
 
 client = MlflowClient()
-
-# Choose the right model version registered in the above cell.
 client.set_registered_model_alias(name=model_name, alias="Champion", version=get_latest_model_version(model_name))
 
 # COMMAND ----------
@@ -352,9 +347,8 @@ import mlflow
 
 loaded_model = mlflow.pyfunc.load_model(f"models:/{model_name}@Champion")
 
-# Make a prediction using the loaded model
 answer = loaded_model.predict(
-    {"id": "111", "query": "私の現在のランクには空港ラウンジ特典はついていますか？"}
+    pd.DataFrame({"id": ["111"], "query": [question]})
 )
 
 print(answer)
@@ -372,7 +366,7 @@ print(answer)
 
 # サービングエンドポイントの作成または更新
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedModelInput
+from databricks.sdk.service.serving import EndpointCoreConfigInput, ServedModelInput, ServedModelInputWorkloadSize
 
 serving_endpoint_name = f"medallioncard_rag_endpoint_{catalog}_{db}"[:63]
 latest_model_version = get_latest_model_version(model_name)
@@ -384,12 +378,11 @@ endpoint_config = EndpointCoreConfigInput(
         ServedModelInput(
             model_name=model_name,
             model_version=latest_model_version,
-            workload_size="Small",
-            scale_to_zero_enabled=True,
+            workload_size=ServedModelInputWorkloadSize.SMALL,
+            scale_to_zero_enabled=False,
             environment_vars={
                 "DATABRICKS_TOKEN": "{{secrets/"+databricks_token_secrets_scope+"/"+databricks_token_secrets_key+"}}",
-                "DATABRICKS_HOST": "{{secrets/"+databricks_host_secrets_scope+"/"+databricks_host_secrets_key+"}}",
-                "DATABRICKS_DWH_HTTP_PATH": "{{secrets/"+databricks_dwh_http_path_secrets_scope+"/"+databricks_dwh_http_path_secrets_key+"}}"
+                "DATABRICKS_HOST": "{{secrets/"+databricks_host_secrets_scope+"/"+databricks_host_secrets_key+"}}"
             }
         )
     ]
@@ -445,7 +438,7 @@ print(answer['predictions'][0]['answer'])
 
 # COMMAND ----------
 
-#display_gradio_app("databricks-demos-chatbot")
+display_gradio_app("hiouchiy-medallioncardcorporation-dbrx")
 
 # COMMAND ----------
 

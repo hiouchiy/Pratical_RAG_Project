@@ -1,39 +1,31 @@
 # Databricks notebook source
 # MAGIC %md 
 # MAGIC ### 環境
-# MAGIC - Runtime: 14.2 ML
-# MAGIC - Node type: i3.2xlarge (Single Node)
+# MAGIC - ノードタイプ: サーバレス
 
 # COMMAND ----------
 
 # MAGIC %md-sandbox
 # MAGIC
-# MAGIC # 1/ LLMチャットボットRAGのためのデータ準備
+# MAGIC # 1/ RAGのためのデータ準備
 # MAGIC
-# MAGIC ### 企業の独自データをDatabricksベクターサーチでインデックス化する
+# MAGIC ### 独自データをベクトルインデックス化、または、オンラインテーブルとしてサービングする
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-flow-1.png?raw=true" style="float: right; width: 800px; margin-left: 10px">
+# MAGIC このノートブックでは、チャットボットがより良い回答を提供できるように、独自のドメイン固有なデータを用いて、Vector Searchのインデックスを作成します。
 # MAGIC
-# MAGIC このノートブックでは、チャットボットがより良い回答を提供できるように、ドキュメントページをインジェストし、Vector Searchインデックスでインデックスを作成します。
+# MAGIC この例では架空のクレジット会社「メダリオンカード株式会社」を例に取り、以下のドキュメントを使用します：
 # MAGIC
-# MAGIC 高品質のデータを準備することは、チャットボットのパフォーマンスにとって重要です。次のステップは、時間をかけてご自身のデータセットで実施することをお勧めします。
-# MAGIC
-# MAGIC Lakehouse AIはお客様のAIやLLMプロジェクトを加速させる最先端のソリューションを提供し、スケーラブルにデータの取り込みと準備を簡素化します。
-# MAGIC
-# MAGIC この例では[docs.databricks.com](docs.databricks.com)のDatabricksドキュメントを使用します：
-# MAGIC
-# MAGIC - ウェブページのダウンロード
-# MAGIC - ページを小さなテキストチャンクに分割します。
-# MAGIC - Databricks Foundationモデルを使用してエンべディングを計算します。
-# MAGIC - Delta TableにとしてVector Searchインデックスを作成します。
-# MAGIC
-# MAGIC <!-- Collect usage data (view). Remove it to disable collection or disable tracker during installation. View README for more details.  -->
-# MAGIC <img width="1px" src="https://ppxrzfxige.execute-api.us-west-2.amazonaws.com/v1/analytics?category=data-science&org_id=2556758628403379&notebook=%2F01-quickstart%2F01-Data-Preparation-and-Index&demo_name=llm-rag-chatbot&event=VIEW&path=%2F_dbdemos%2Fdata-science%2Fllm-rag-chatbot%2F01-quickstart%2F01-Data-Preparation-and-Index&version=1">
+# MAGIC - カード会員向けFAQデータ（非構造化データ）　→ ベクトル検索用インデックス化
+# MAGIC - カード会員マスタ（構造化データ）　→ オンラインテーブル化
 
 # COMMAND ----------
 
-# DBTITLE 1,必要な外部ライブラリのインストール 
-# MAGIC %pip install mlflow==2.9.0 lxml==4.9.3 transformers==4.30.2 langchain==0.0.344 databricks-vectorsearch==0.22 databricks-sdk==0.12.0 databricks-sql-connector
+# MAGIC %md
+# MAGIC ## 0.ライブラリのインストール & 外部モジュールのロード
+
+# COMMAND ----------
+
+# MAGIC %pip install mlflow==2.10.1 lxml==4.9.3 transformers==4.30.2 langchain==0.1.5 databricks-vectorsearch==0.22 databricks-sdk==0.28.0 databricks-feature-store==0.17.0
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -49,105 +41,98 @@
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC ## Databricks ドキュメントのサイトマップとページの抽出
+# MAGIC ## 1.データ準備
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-prep-1.png?raw=true" style="float: right; width: 600px; margin-left: 10px">
-# MAGIC
-# MAGIC まず、生のデータセットを Delta Lake テーブルとして作成してみましょう。
-# MAGIC
-# MAGIC このデモでは、`docs.databricks.com`からいくつかのドキュメントページを直接ダウンロードし、HTMLコンテンツを保存します。
+# MAGIC まず、生のデータセットを Delta Tableとして作成してみましょう。
 # MAGIC
 # MAGIC 主な手順は以下の通りです：
 # MAGIC
-# MAGIC - スクリプトを実行して `sitemap.xml` ファイルからページの URL を抽出します。
-# MAGIC - ウェブページをダウンロード
-# MAGIC - BeautifulSoupを使ってArticleBodyを抽出します。
-# MAGIC - HTMLの結果をデルタレイクのテーブルに保存
+# MAGIC - [FAQデータ](https://raw.githubusercontent.com/hiouchiy/Pratical_RAG_Project/main/medallioncard/qa.json)（非構造化データ）をダウンロードしてDelta Tableとして保存
+# MAGIC - [カード会員マスタ](https://raw.githubusercontent.com/hiouchiy/Pratical_RAG_Project/main/medallioncard/user.json)（構造化データ）をダウンロードしてDelta Tableとして保存
 
 # COMMAND ----------
 
-spark.conf.set("my.catalogName", catalog)
-spark.conf.set("my.schemaName", dbName)
-spark.conf.set("my.volumeName", volume)
-spark.conf.set("my.embbedTableName", embed_table_name)
+# MAGIC %md
+# MAGIC ### 1-1.データを保存しておくためのカタログ/スキーマ/ボリュームを作成
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE CATALOG IF NOT EXISTS ${my.catalogName};
-# MAGIC USE CATALOG ${my.catalogName};
-# MAGIC CREATE SCHEMA IF NOT EXISTS ${my.catalogName}.${my.schemaName};
-# MAGIC USE SCHEMA ${my.schemaName};
-# MAGIC CREATE VOLUME IF NOT EXISTS ${my.catalogName}.${my.schemaName}.${my.volumeName};
+sql(f"CREATE CATALOG IF NOT EXISTS {catalog};")
+sql(f"USE CATALOG {catalog};")
+sql(f"CREATE SCHEMA IF NOT EXISTS {dbName};")
+sql(f"USE SCHEMA {dbName};")
+sql(f"CREATE VOLUME IF NOT EXISTS {volume};")
 
 # COMMAND ----------
 
-# Drop if table existing
-sql(f"drop table if exists {raw_data_table_name}")
+# MAGIC %md
+# MAGIC ### 1-2.FAQデータをDelta Tableとして保存
+# MAGIC 元データはJSON形式です。それをダウンロードして、Delta Tableの形式で保存しておきます。この際、特にスキーマ定義などは厳密に行わず、ありのままのデータを保存します。このようなテーブルをDatabricksのメダリオンアーキテクチャーではBronzeテーブルと呼びます。
 
-# Read raw data and create delta table to store it
+# COMMAND ----------
+
+# すでに同名のテーブルが存在する場合は削除
+sql(f"drop table if exists {faq_bronze_table_name}")
+
+# 生データを読み込み、デルタ・テーブルを作成して保存
 raw_data_url = "https://raw.githubusercontent.com/hiouchiy/Pratical_RAG_Project/main/medallioncard/qa.json"
 !wget $raw_data_url -O /tmp/qa.json
 
 unity_catalog_volume_path = f'/Volumes/{catalog}/{dbName}/{volume}/qa.json'
 !cp /tmp/qa.json $unity_catalog_volume_path
 
-spark.read.option("multiline","true").json(unity_catalog_volume_path).write.mode('overwrite').saveAsTable(raw_data_table_name)
+spark.read.option("multiline","true").json(unity_catalog_volume_path).write.mode('overwrite').saveAsTable(faq_bronze_table_name)
 
-display(spark.table(raw_data_table_name))
+display(spark.table(faq_bronze_table_name))
 
 # COMMAND ----------
 
-# Drop if table existing
-sql(f"drop table if exists {user_table_name}")
+# MAGIC %md
+# MAGIC ### 1-3.カード会員マスタをDelta Tableとして保存
+# MAGIC 元データはJSON形式です。それをダウンロードして、Delta Tableの形式で保存しておきます。この際、特にスキーマ定義などは厳密に行わず、ありのままのデータを保存します。このようなテーブルをDatabricksのメダリオンアーキテクチャーではBronzeテーブルと呼びます。
 
-# Read raw data and create delta table to store it
+# COMMAND ----------
+
+# すでに同名のテーブルが存在する場合は削除
+sql(f"drop table if exists {user_bronze_table_name}")
+
+# 生データを読み込み、デルタ・テーブルを作成して保存
 raw_data_url = "https://raw.githubusercontent.com/hiouchiy/Pratical_RAG_Project/main/medallioncard/user.json"
 !wget $raw_data_url -O /tmp/user.json
 
 unity_catalog_volume_path = f'/Volumes/{catalog}/{dbName}/{volume}/user.json'
 !cp /tmp/user.json $unity_catalog_volume_path
 
-spark.read.option("multiline","true").json(unity_catalog_volume_path).write.mode('overwrite').saveAsTable(user_table_name)
+spark.read.option("multiline","true").json(unity_catalog_volume_path).write.mode('overwrite').saveAsTable(user_bronze_table_name)
 
-display(spark.table(user_table_name))
+display(spark.table(user_bronze_table_name))
 
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC ## ベクターサーチインデックスの作成
-# MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/databricks-vector-search-type.png?raw=true" style="float: right" width="800px">
+# MAGIC ## 2.FAQデータを使ってベクターサーチインデックスを作成
 # MAGIC
 # MAGIC Databricksは複数のタイプのベクトル検索インデックスを提供します：
 # MAGIC
-# MAGIC - **Managedエンベッディング**：テキストカラムとエンドポイント名を指定すると、DatabricksがDeltaテーブルとインデックスを同期します。
+# MAGIC - **マネージドエンベッディング**：テキストカラムとエンドポイント名を指定すると、DatabricksがDeltaテーブルとインデックスを同期します。
 # MAGIC - **自己管理型エンベッディング**：エンベッディングを計算し、デルタテーブルのフィールドとして保存すると、Databricksがインデックスを同期します。
 # MAGIC - **ダイレクトインデックス**: デルタテーブルを持たずにインデックスを使用・更新したい場合
 # MAGIC
-# MAGIC このデモでは、**自己管理型エンベッディング** インデックスを設定する方法を紹介します。
-# MAGIC
-# MAGIC そのためには、まずチャンクのエンベッディングを計算し、デルタレイクのテーブルフィールドとして `array&ltfloat&gt` 型のデータとして保存する必要があります。
+# MAGIC このデモでは、**マネージドエンベッディング** インデックスを設定する方法を紹介します。
 
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC ## Databricks BGE Embeddings Foundation モデルのエンドポイント
+# MAGIC ### 2-1.Embedding モデルのエンドポイントを確認
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-prep-4.png?raw=true" style="float: right; width: 600px; margin-left: 10px">
-# MAGIC
-# MAGIC Foundation ModelsはDatabricksによって提供されており、すぐに使用することができます。
-# MAGIC
-# MAGIC Databricksはエンベッディングの計算やモデルの評価のためにいくつかのエンドポイントをサポートしています：
-# MAGIC - Databricks が提供する **ファウンデーションモデルエンドポイント** (例: llama2-70B, MPT...)
+# MAGIC DatabricksはEmbeddingの計算やモデルの評価のためにいくつかのエンドポイントをサポートしています：
+# MAGIC - Databricks が提供する **基盤モデルエンドポイント** (例: llama2-70B, MPT...)
 # MAGIC - 外部モデルへのゲートウェイとして動作する **外部エンドポイント** (例: Azure OpenAI)
 # MAGIC - Databricksモデルサービス上でホストされるファインチューニングされた**カスタムモデル用のエンドポイント**
 # MAGIC
-# MAGIC [Model Serving Endpoints page](/ml/endpoints)を開いて、ファウンデーションモデルを試してください。
+# MAGIC このデモでは、カスタムモデル(e5-large)のエンドポイントを使用しますが、必要に応じて基盤モデルのBGE（埋め込み）へ変更することも可能です。 
 # MAGIC
-# MAGIC このデモでは、ファウンデーションモデルのBGE（埋め込み）とllama2-70B（チャット）を使用します。 <br/><br/>
-# MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/databricks-foundation-models.png?raw=true" width="600px" >
+# MAGIC なお、カスタムのEmbeddingモデルエンドポイントをDatabricks上にデプロイする手順は[こちら](https://github.com/hiouchiy/databricks-ml-examples/tree/master/llm-models/embedding/e5/multilingual-e5-large)を参照ください。
 
 # COMMAND ----------
 
@@ -164,86 +149,61 @@ embeddings = [e for e in response.predictions]
 
 print(embeddings)
 
-# COMMAND ----------
+# Databricksの基盤モデル「databricks-bge-large-en」への切り替えも簡単
+# response = deploy_client.predict(
+#   endpoint = "databricks-bge-large-en", 
+#   inputs = {"input": ["Apache Sparkとはなんですか?", "ビッグデータとはなんですか？"]}
+# )
+# embeddings = [e for e in response.data]
 
-# DBTITLE 1,ドキュメントをdatabricks_documentationテーブルの作成
-# MAGIC %sql
-# MAGIC DROP TABLE IF EXISTS ${my.embbedTableName};
-# MAGIC --Note that we need to enable Change Data Feed on the table to create the index
-# MAGIC CREATE TABLE IF NOT EXISTS ${my.embbedTableName} (
-# MAGIC   id BIGINT GENERATED BY DEFAULT AS IDENTITY,
-# MAGIC   usertype STRING,
-# MAGIC   query STRING,
-# MAGIC   response STRING,
-# MAGIC   embedding ARRAY <FLOAT>
-# MAGIC ) TBLPROPERTIES (delta.enableChangeDataFeed = true); 
+# print(embeddings)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### チャンクのエンベッディングを計算し、デルタテーブルに保存します。
-# MAGIC
-# MAGIC 最後のステップは、すべてのドキュメントチャンクの埋め込みを計算することです。foundationモデルのエンドポイントを使ってエンベッディングを計算するudfを作りましょう。
-# MAGIC
-# MAGIC *この部分は、通常、新しいドキュメントページが更新されるとすぐに実行されるプロダクショングレードのジョブとしてセットアップされることに注意してください。<br/> これは、Delta Live Tableパイプラインとしてセットアップすることで、インクリメンタルにデータ更新を処理することができます。*
+# MAGIC ### 2-2.FAQデータのSilverテーブルを作成
+# MAGIC 先ほど作成したFAQデータのBronzeテーブルを元に、スキーマ定義を厳密に行い、（本サンプルでは実施しませんが）データクレンジングなど加工を施したデータをSilverテーブルとして保存します。
 
 # COMMAND ----------
 
-import mlflow.deployments
-deploy_client = mlflow.deployments.get_deploy_client("databricks")
+sql(f"DROP TABLE IF EXISTS {faq_silver_table_name};")
 
-@pandas_udf("array<float>")
-def get_embedding(contents: pd.Series) -> pd.Series:
-    def get_embeddings(batch):
-        response = deploy_client.predict(
-            endpoint=embedding_endpoint_name, 
-            inputs={"inputs": batch})
-        return [e for e in response.predictions]
+sql(f"""
+--インデックスを作成するには、テーブルのChange Data Feedを有効にします
+CREATE TABLE IF NOT EXISTS {faq_silver_table_name} (
+  id BIGINT GENERATED BY DEFAULT AS IDENTITY,
+  usertype STRING,
+  query STRING,
+  response STRING
+) TBLPROPERTIES (delta.enableChangeDataFeed = true); 
+""")
 
-    # エンベッディングモデルはリクエストごとに最大150の入力を取るので、コンテンツを150のアイテムごとに分割します。
-    max_batch_size = 150
-    batches = [contents.iloc[i:i + max_batch_size] for i in range(0, len(contents), max_batch_size)]
+spark.table(faq_bronze_table_name).write.mode('overwrite').saveAsTable(faq_silver_table_name)
 
-    # Process each batch and collect the results
-    all_embeddings = []
-    for batch in batches:
-        all_embeddings += get_embeddings(batch.tolist())
-
-    return pd.Series(all_embeddings)
+display(spark.table(faq_silver_table_name))
 
 # COMMAND ----------
 
-(spark.table(raw_data_table_name)
-      .withColumn('embedding', get_embedding('response'))
-      .write.mode('overwrite').saveAsTable(embed_table_name))
-
-display(spark.table(embed_table_name))
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC select * from ${my.embbedTableName}
-# MAGIC where response like '%%' order by id;
+display(
+  sql(f"""select * from {faq_silver_table_name} where response like '%%' order by id;""")
+)
 
 # COMMAND ----------
 
 # MAGIC %md-sandbox
 # MAGIC
-# MAGIC ### データセットの準備ができました！それでは、自己管理型Vector Search Indexを作成しましょう。
+# MAGIC ### 2-3.Vector Search インデックスを作成
 # MAGIC
-# MAGIC <img src="https://github.com/databricks-demos/dbdemos-resources/blob/main/images/product/chatbot-rag/llm-rag-self-managed-prep-3.png?raw=true" style="float: right; width: 600px; margin-left: 10px">
+# MAGIC 次に、Databricks Vector Searchを設定します。
 # MAGIC
-# MAGIC データセットの準備ができました。ドキュメントページを小さなセクションに分割し、エンベッディングを計算し、Delta Lakeテーブルとして保存しました。
-# MAGIC
-# MAGIC 次に、このテーブルからデータを取り込むためにDatabricks Vector Searchを設定します。
-# MAGIC
-# MAGIC Vector search indexは、エンベッディングデータを提供するためにVector searchエンドポイントを使用します（Vector Search APIエンドポイントと考えることができます）。<br/>
+# MAGIC Vector search インデックスは、埋め込みデータを提供するためにVector searchエンドポイントを使用します（Vector Search APIエンドポイントと考えることができます）。<br/>
 # MAGIC 複数のインデックスが同じエンドポイントを使用できます。まずは一つ作ってみましょう。
 
 # COMMAND ----------
 
 # DBTITLE 1,Vector searchエンドポイントの作成
 from databricks.vector_search.client import VectorSearchClient
+
 vsc = VectorSearchClient()
 
 if VECTOR_SEARCH_ENDPOINT_NAME not in [e['name'] for e in vsc.list_endpoints().get('endpoints', [])]:
@@ -260,33 +220,38 @@ print(f"Endpoint named {VECTOR_SEARCH_ENDPOINT_NAME} is ready.")
 
 # COMMAND ----------
 
-# DBTITLE 1,エンドポイントを使って自己管理型ベクターサーチインデックスを作成します。
 from databricks.sdk import WorkspaceClient
 import databricks.sdk.service.catalog as c
+import time
 
-#The table we'd like to index
-source_table_fullname = f"{catalog}.{db}.{embed_table_name}"
-# Where we want to store our index
-vs_index_fullname = f"{catalog}.{db}.{embed_table_name}_vs_index"
+#インデックスの元となるテーブル
+source_table_fullname = f"{catalog}.{db}.{faq_silver_table_name}"
 
+#インデックスを格納する場所
+vs_index_fullname = f"{catalog}.{db}.{faq_silver_table_name}_vs_index"
+
+#すでに同名のインデックスが存在すれば削除
 if index_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname):
   print(f"Deleting index {vs_index_fullname} on endpoint {VECTOR_SEARCH_ENDPOINT_NAME}...")
   vsc.delete_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
+  while True:
+    if index_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname):
+      time.sleep(1)
+      print(".")
+    else:      
+      break
 
-# if not index_exists(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname):
+#インデックスを新規作成
 print(f"Creating index {vs_index_fullname} on endpoint {VECTOR_SEARCH_ENDPOINT_NAME}...")
 vsc.create_delta_sync_index(
   endpoint_name=VECTOR_SEARCH_ENDPOINT_NAME,
   index_name=vs_index_fullname,
-  source_table_name=source_table_fullname,
   pipeline_type="TRIGGERED",
+  source_table_name=source_table_fullname,
   primary_key="id",
-  embedding_dimension=1024, #Match your model embedding size (e5)
-  embedding_vector_column="embedding"
+  embedding_source_column="response",
+  embedding_model_endpoint_name=embedding_endpoint_name
 )
-# else:
-  #同期をトリガーして、テーブルに保存された新しいデータでベクターサーチのコンテンツを更新します。
-  # vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).sync()
 
 #インデックスの準備ができ、すべてエンベッディングが作成され、インデックスが作成されるのを待ちましょう。
 wait_for_index_to_be_ready(vsc, VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
@@ -294,12 +259,21 @@ print(f"index {vs_index_fullname} on table {source_table_fullname} is ready")
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC 作成したインデックスを更新する場合は以下のコードを実行します。
+
+# COMMAND ----------
+
+#同期をトリガーして、テーブルに保存された新しいデータでベクターサーチのコンテンツを更新
+vs_index = vsc.get_index(
+  VECTOR_SEARCH_ENDPOINT_NAME, 
+  vs_index_fullname)
+vs_index.sync()
+
+# COMMAND ----------
+
 # MAGIC %md 
-# MAGIC ## 類似コンテンツの検索
-# MAGIC
-# MAGIC これだけです。Databricksは自動的にDelta Live Tableの新しいエントリーを取り込み、同期します。
-# MAGIC
-# MAGIC データセットのサイズとモデルのサイズによっては、インデックスの作成に数秒かかることがあります。
+# MAGIC ### 2-4.類似検索を試す
 # MAGIC
 # MAGIC 試しに類似コンテンツを検索してみましょう。
 # MAGIC
@@ -307,30 +281,161 @@ print(f"index {vs_index_fullname} on table {source_table_fullname} is ready")
 
 # COMMAND ----------
 
-import mlflow.deployments
-deploy_client = mlflow.deployments.get_deploy_client("databricks")
+# インデックスへの参照を取得
+vs_index = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname)
 
-question = "現在の私のランクの特典を教えてください。"
-response = deploy_client.predict(
-  endpoint=embedding_endpoint_name, 
-  inputs={"inputs": [question]}
-)
-embeddings = [e for e in response.predictions]
-
-results = vsc.get_index(VECTOR_SEARCH_ENDPOINT_NAME, vs_index_fullname).similarity_search(
-  query_vector=embeddings[0],
+results = vs_index.similarity_search(
+  query_text="現在の私のランクの特典を教えてください。",
   columns=["usertype", "query", "response"],
-  num_results=10,
+  num_results=5,
   filters={"usertype": ("general", "gold")})
 docs = results.get('result', {}).get('data_array', [])
 docs
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ## 3.カード会員マスタを使って特徴量サービングを作成
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 3-1.カード会員マスタのBronzeテーブルからSilverテーブルを作成
+
+# COMMAND ----------
+
+from databricks import feature_engineering
+
+fe = feature_engineering.FeatureEngineeringClient()
+
+# Where we want to store our index
+sql(f"DROP TABLE IF EXISTS {user_silver_table_name};")
+
+sql(f"""
+--インデックスを作成するには、テーブルのChange Data Feedを有効にします
+CREATE TABLE IF NOT EXISTS {user_silver_table_name} (
+    id VARCHAR(255),
+    type STRING,
+    name STRING,
+    birthday STRING,
+    since STRING,
+    CONSTRAINT users_pk PRIMARY KEY(id)
+) TBLPROPERTIES (delta.enableChangeDataFeed = true);
+""")
+
+# spark.table(user_bronze_table_name).write.mode('overwrite').saveAsTable(user_silver_table_name)
+# Create the feature table
+user_bronze_table_df = spark.table(user_bronze_table_name)
+fe.write_table(name=user_silver_table_name, df=user_bronze_table_df)
+display(spark.table(user_silver_table_name))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 3-2.カード会員マスタのSilverテーブルからオンラインテーブルを作成
+
+# COMMAND ----------
+
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.catalog import OnlineTableSpec, OnlineTableSpecTriggeredSchedulingPolicy
+
+w = WorkspaceClient()
+
+# オンライン・テーブルの作成
+source_table_full_name = f"{catalog}.{db}.{user_silver_table_name}"
+spec = OnlineTableSpec(
+  primary_key_columns=["id"],
+  source_table_full_name=source_table_full_name,
+  run_triggered=OnlineTableSpecTriggeredSchedulingPolicy.from_dict({'triggered': 'true'})
+)
+
+# オンラインテーブルを格納する場所
+user_info_fs_online_fullname = source_table_full_name + "_online"
+w.online_tables.create(name=user_info_fs_online_fullname, spec=spec)
+
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 3-3.オンラインテーブルへアクセスするためのエンドポイントを作成
+
+# COMMAND ----------
+
+from databricks.feature_engineering.entities.feature_lookup import FeatureLookup
+from databricks.feature_engineering import FeatureEngineeringClient, FeatureFunction
+from databricks.feature_engineering.entities.feature_serving_endpoint import (
+    EndpointCoreConfig,
+    ServedEntity
+)
+
+# Create a lookup to fetch features by key
+features=[
+  FeatureLookup(
+    table_name=user_silver_table_name,
+    lookup_key="id"
+  )
+]
+
+fe = FeatureEngineeringClient()
+
+# Create feature spec with the lookup for features
+user_spec_name = f"{catalog}.{db}.user_info_spec"
+try:
+  fe.create_feature_spec(name=user_spec_name, features=features)
+except Exception as e:
+  if "already exists" in str(e):
+    fe.delete_feature_spec(name=user_spec_name)
+    fe.create_feature_spec(name=user_spec_name, features=features)
+    # pass
+  else:
+    raise e
+  
+# Create endpoint for serving user budget preferences
+try:
+  fe.create_feature_serving_endpoint(
+    name=user_endpoint_name, 
+    config=EndpointCoreConfig(
+      served_entities=ServedEntity(
+        feature_spec_name=user_spec_name, 
+        workload_size="Small", 
+        scale_to_zero_enabled=False)
+      )
+    )
+
+  # Print endpoint creation status
+  print("Started creating endpoint " + user_endpoint_name)
+except Exception as e:
+  if "already exists" in str(e):
+    pass
+  else:
+    raise e
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 3-4.エンドポイントをテストする
+
+# COMMAND ----------
+
+import mlflow.deployments
+
+client = mlflow.deployments.get_deploy_client("databricks")
+response = client.predict(
+    endpoint=user_endpoint_name,
+    inputs={
+        "dataframe_records": [
+            {"id": "111"},
+        ]
+    },
+)
+print(response['outputs'][0])
+
+# COMMAND ----------
+
 # MAGIC %md 
 # MAGIC ## 次のステップ RAGを使ったチャットボットモデルのデプロイ
 # MAGIC
-# MAGIC Databricks Lakehouse AIを使用すると、数行のコードと設定だけで、ドキュメントの取り込みと準備、その上でのVector Searchインデックスのデプロイを簡単に行うことができます。
+# MAGIC Databricks Mosaic AIを使用すると、数行のコードと設定だけで、ドキュメントの取り込みと準備、その上でのVector Searchインデックスのデプロイを簡単に行うことができます。
 # MAGIC
 # MAGIC これにより、データプロジェクトが簡素化、高速化され、次のステップである、プロンプトのオーグメンテーションによるリアルタイムチャットボットのエンドポイントの作成に集中できるようになります。
 # MAGIC
