@@ -83,7 +83,7 @@ os.environ['DATABRICKS_HOST'] = host
 
 os.environ['DATABRICKS_TOKEN'] = dbutils.secrets.get(databricks_token_secrets_scope, databricks_token_secrets_key)
 
-index_name=f"{catalog}.{db}.{embed_table_name}_vs_index"
+index_name=f"{catalog}.{db}.{faq_silver_table_name}_vs_index"
 
 print("HOST: " + os.environ['DATABRICKS_HOST'])
 print("TOKEN: " + os.environ['DATABRICKS_TOKEN'])
