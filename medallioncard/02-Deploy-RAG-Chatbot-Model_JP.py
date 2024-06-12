@@ -148,13 +148,12 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
         """
         コンストラクタ
         """
-
+        
+        import os
         from databricks.vector_search.client import VectorSearchClient
         import mlflow.deployments
         from langchain.chat_models import ChatDatabricks
         from langchain_core.messages import SystemMessage
-        from databricks import sql
-        import os
 
         # ベクトル検索インデックスを取得
         vsc = VectorSearchClient(
