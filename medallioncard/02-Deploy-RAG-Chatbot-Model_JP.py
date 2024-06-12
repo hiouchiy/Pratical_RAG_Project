@@ -34,12 +34,6 @@
 
 # COMMAND ----------
 
-# DBTITLE 1,必要な外部ライブラリのインストール 
-# MAGIC %pip install mlflow==2.9.0 langchain==0.0.344 databricks-vectorsearch==0.22 databricks-sdk==0.12.0 mlflow[databricks] databricks-sql-connector
-# MAGIC dbutils.library.restartPython()
-
-# COMMAND ----------
-
 # MAGIC %pip install mlflow==2.10.1 langchain==0.1.5 databricks-vectorsearch==0.22 databricks-sdk==0.28.0 mlflow[databricks]
 # MAGIC dbutils.library.restartPython()
 
@@ -381,8 +375,8 @@ endpoint_config = EndpointCoreConfigInput(
             workload_size=ServedModelInputWorkloadSize.SMALL,
             scale_to_zero_enabled=False,
             environment_vars={
-                "DATABRICKS_TOKEN": "{{secrets/"+databricks_token_secrets_scope+"/"+databricks_token_secrets_key+"}}",
-                "DATABRICKS_HOST": "{{secrets/"+databricks_host_secrets_scope+"/"+databricks_host_secrets_key+"}}"
+                "DATABRICKS_HOST": "{{secrets/"+databricks_host_secrets_scope+"/"+databricks_host_secrets_key+"}}",
+                "DATABRICKS_TOKEN": "{{secrets/"+databricks_token_secrets_scope+"/"+databricks_token_secrets_key+"}}"
             }
         )
     ]
