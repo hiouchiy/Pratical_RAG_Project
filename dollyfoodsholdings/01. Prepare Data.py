@@ -29,12 +29,11 @@ spark.conf.set("my.volumeName", volume)
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC CREATE CATALOG IF NOT EXISTS ${my.catalogName};
-# MAGIC USE CATALOG ${my.catalogName};
-# MAGIC CREATE SCHEMA IF NOT EXISTS ${my.catalogName}.${my.schemaName};
-# MAGIC USE SCHEMA ${my.schemaName};
-# MAGIC CREATE VOLUME IF NOT EXISTS ${my.catalogName}.${my.schemaName}.${my.volumeName};
+sql(f"CREATE CATALOG IF NOT EXISTS {catalog};")
+sql(f"USE CATALOG {catalog};")
+sql(f"CREATE SCHEMA IF NOT EXISTS {dbName};")
+sql(f"USE SCHEMA {dbName};")
+sql(f"CREATE VOLUME IF NOT EXISTS {volume};")
 
 # COMMAND ----------
 
@@ -124,7 +123,3 @@ sql(f"ALTER TABLE {company_table_name} ALTER COLUMN YearOfEstablishment COMMENT 
 
 # MAGIC %md
 # MAGIC ## 以上でデータ準備は完了です。Genie Data Roomへ移動しましょう。 
-
-# COMMAND ----------
-
-
