@@ -56,13 +56,8 @@
 # MAGIC - FAQデータの元ファイル（JSON）をダウンロード
 # MAGIC - JSONファイルをBronzeテーブル（Delta Table）として保存
 # MAGIC - Bronzeテーブルを加工し、Silverテーブル（Delta Table）として保存
-# MAGIC
-# MAGIC まず、生のデータセットを Delta Tableとして作成してみましょう。
-# MAGIC
-# MAGIC
-# MAGIC
-# MAGIC - [FAQデータ](https://raw.githubusercontent.com/hiouchiy/Pratical_RAG_Project/main/medallioncard/qa.json)（非構造化データ）をダウンロードしてDelta Tableとして保存
-# MAGIC - [カード会員マスタ](https://raw.githubusercontent.com/hiouchiy/Pratical_RAG_Project/main/medallioncard/user.json)（構造化データ）をダウンロードしてDelta Tableとして保存
+# MAGIC - ベクトル検索用のエンドポイントを作成
+# MAGIC - Silverテーブルからベクトル検索インデックスを作成
 
 # COMMAND ----------
 
@@ -126,14 +121,8 @@ display(spark.table(faq_silver_table_name))
 
 # COMMAND ----------
 
-display(
-  sql(f"""select * from {faq_silver_table_name} where response like '%%' order by id;""")
-)
-
-# COMMAND ----------
-
 # MAGIC %md-sandbox
-# MAGIC ### 1-4. SiFAQデータを使ってベクターサーチインデックスを作成
+# MAGIC ### 1-4. Silverテーブルからベクトル検索用インデックスを作成
 # MAGIC
 # MAGIC Databricksは複数のタイプのベクトル検索インデックスを提供します：
 # MAGIC
@@ -146,7 +135,7 @@ display(
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC ### 2-1.Embedding モデルのエンドポイントを確認
+# MAGIC #### 1-4-1. Embedding モデルのエンドポイントを確認
 # MAGIC _（※この操作はGUIでも実施可能）_
 # MAGIC
 # MAGIC DatabricksはEmbeddingの計算やモデルの評価のためにいくつかのエンドポイントをサポートしています：
@@ -186,7 +175,7 @@ print(embeddings)
 
 # MAGIC %md-sandbox
 # MAGIC
-# MAGIC ### 2-3.Vector Search インデックスを作成
+# MAGIC #### 1-4-2. ベクトル検索エンドポイントを作成
 # MAGIC _（※この操作はGUIでも実施可能）_
 # MAGIC
 # MAGIC 次に、Databricks Vector Searchを設定します。
@@ -212,6 +201,15 @@ print(f"Endpoint named {VECTOR_SEARCH_ENDPOINT_NAME} is ready.")
 # MAGIC %md 
 # MAGIC
 # MAGIC エンドポイントは [Vector Search Endpoints UI](#/setting/clusters/vector-search) で確認できます。エンドポイント名をクリックすると、そのエンドポイントによって提供されているすべてのインデックスが表示されます。
+
+# COMMAND ----------
+
+# MAGIC %md-sandbox
+# MAGIC
+# MAGIC #### 1-4-3. ベクトル検索インデックスを作成
+# MAGIC _（※この操作はGUIでも実施可能）_
+# MAGIC
+# MAGIC 次に、インデックスを作成します。
 
 # COMMAND ----------
 
@@ -268,7 +266,7 @@ vs_index.sync()
 # COMMAND ----------
 
 # MAGIC %md 
-# MAGIC ### 2-4.類似検索を試す
+# MAGIC ### 1-5. Similarity検索を試す
 # MAGIC
 # MAGIC 試しに類似コンテンツを検索してみましょう。
 # MAGIC
@@ -290,12 +288,27 @@ docs
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3.カード会員マスタを使って特徴量サービングを作成
+# MAGIC ---
+
+# COMMAND ----------
+
+# MAGIC %md-sandbox
+# MAGIC ## ステップ2. カード会員マスタをオンラインテーブル化
+# MAGIC
+# MAGIC 続いて、[カード会員マスタ](https://raw.githubusercontent.com/hiouchiy/Pratical_RAG_Project/main/medallioncard/user.json)（JSON）をオンラインテーブルとしてサービングして、会員属性データを取り出せるようにしましょう。
+# MAGIC
+# MAGIC 主な手順は以下の通りです：
+# MAGIC
+# MAGIC - 会員マスタデータの元ファイル（JSON）をダウンロード
+# MAGIC - JSONファイルをBronzeテーブル（Delta Table）として保存
+# MAGIC - Bronzeテーブルを加工し、Silverテーブル（Delta Table）として保存
+# MAGIC - Silverテーブルをオンラインテーブルを作成
+# MAGIC - オンラインテーブルへのサービングエンドポイントを作成
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 1-3.カード会員マスタをDelta Tableとして保存
+# MAGIC ### 2-1. カード会員マスタをDelta Tableとして保存
 # MAGIC 元データはJSON形式です。それをダウンロードして、Delta Tableの形式で保存しておきます。この際、特にスキーマ定義などは厳密に行わず、ありのままのデータを保存します。このようなテーブルをDatabricksのメダリオンアーキテクチャーではBronzeテーブルと呼びます。
 
 # COMMAND ----------
@@ -317,7 +330,7 @@ display(spark.table(user_bronze_table_name))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 3-1.カード会員マスタのBronzeテーブルからSilverテーブルを作成
+# MAGIC ### 2-2. カード会員マスタのBronzeテーブルからSilverテーブルを作成
 
 # COMMAND ----------
 
@@ -349,7 +362,7 @@ display(spark.table(user_silver_table_name))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 3-2.カード会員マスタのSilverテーブルからオンラインテーブルを作成
+# MAGIC ### 2-3. カード会員マスタのSilverテーブルからオンラインテーブルを作成
 # MAGIC _（※この操作はGUIでも実施可能）_
 
 # COMMAND ----------
@@ -375,7 +388,7 @@ w.online_tables.create(name=user_info_fs_online_fullname, spec=spec)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 3-3.オンラインテーブルへアクセスするためのエンドポイントを作成
+# MAGIC ### 2-4. オンラインテーブルへアクセスするためのエンドポイントを作成
 
 # COMMAND ----------
 
@@ -431,7 +444,7 @@ except Exception as e:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 3-4.エンドポイントをテストする
+# MAGIC ### 2-5.エンドポイントをテストする
 # MAGIC _（※この操作はGUIでも実施可能）_
 
 # COMMAND ----------
@@ -448,6 +461,11 @@ response = client.predict(
     },
 )
 print(response['outputs'][0])
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ---
 
 # COMMAND ----------
 

@@ -6,7 +6,7 @@
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC # 2/ RAGによるチャットボットの作成
+# MAGIC # RAGによるチャットボットの作成
 # MAGIC
 # MAGIC 前のノートブックでベクターサーチインデックスと特徴量サービングの準備を行いました。
 # MAGIC このノートブックでは、RAGを実行するためのモデルサービングエンドポイントを作成し、デプロイしてみましょう。
@@ -93,6 +93,7 @@ print("Vector Search Index Name: " + index_name)
 
 # MAGIC %md-sandbox
 # MAGIC ### チャットモデルの構築 （DBRX-instruct 基盤モデルへのクエリ）
+# MAGIC _（※この操作はGUIでも実施可能）_
 # MAGIC
 # MAGIC 今回はDatabricksが提供する基盤モデルAPIから DBRX を使って回答を生成します。
 # MAGIC その他にも、以下のモデルエンドポイントを利用可能です。
@@ -269,9 +270,9 @@ print(results[0]["answer"])
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### モデルをUnityカタログレジストリに保存
+# MAGIC ### モデルをUnityカタログ内のモデルレジストリに保存
 # MAGIC
-# MAGIC モデルの準備ができたので、Unity Catalogスキーマに登録します
+# MAGIC モデルの準備ができたので、Unity Catalogに登録します
 
 # COMMAND ----------
 
@@ -349,7 +350,8 @@ print(answer)
 # COMMAND ----------
 
 # MAGIC %md 
-# MAGIC ### チャットモデルをサービング・エンドポイントとしてデプロイする
+# MAGIC ### チャットモデルをサービング・エンドポイントとしてデプロイ
+# MAGIC _（※この操作はGUIでも実施可能）_
 # MAGIC
 # MAGIC モデルはUnity Catalogに保存されます。最後のステップは、Model Servingとしてデプロイすることです。
 # MAGIC
