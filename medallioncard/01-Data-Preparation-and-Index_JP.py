@@ -67,7 +67,7 @@ sql(f"CREATE VOLUME IF NOT EXISTS {volume};")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 1-2.FAQデータをDelta Tableとして保存
+# MAGIC ### 1-2.FAQデータ（JSON）をBronzeテーブル（Delta Table）として保存
 # MAGIC 元データはJSON形式です。それをダウンロードして、Delta Tableの形式で保存しておきます。この際、特にスキーマ定義などは厳密に行わず、ありのままのデータを保存します。このようなテーブルをDatabricksのメダリオンアーキテクチャーではBronzeテーブルと呼びます。
 
 # COMMAND ----------
@@ -127,11 +127,11 @@ display(spark.table(user_bronze_table_name))
 # MAGIC ### 2-1.Embedding モデルのエンドポイントを確認
 # MAGIC
 # MAGIC DatabricksはEmbeddingの計算やモデルの評価のためにいくつかのエンドポイントをサポートしています：
-# MAGIC - Databricks が提供する **基盤モデルエンドポイント** (例: llama2-70B, MPT...)
-# MAGIC - 外部モデルへのゲートウェイとして動作する **外部エンドポイント** (例: Azure OpenAI)
-# MAGIC - Databricksモデルサービス上でホストされるファインチューニングされた**カスタムモデル用のエンドポイント**
+# MAGIC - **基盤モデルエンドポイント**：Databricks が提供するマネージド・エンドポイント (例: llama2-70B, MPT...)
+# MAGIC - **外部エンドポイント**：外部モデルへのゲートウェイとして動作するエンドポイント  (例: Azure OpenAI)
+# MAGIC - **カスタムモデル用のエンドポイント**：Databricksモデルサービス上でホストされるファインチューニングされたモデルのエンドポイント
 # MAGIC
-# MAGIC このデモでは、カスタムモデル(e5-large)のエンドポイントを使用しますが、必要に応じて基盤モデルのBGE（埋め込み）へ変更することも可能です。 
+# MAGIC このデモでは、3つ目のオプションである**カスタムモデル(e5-large)のエンドポイント**を使用しますが、必要に応じて基盤モデルのBGE（埋め込み）へ変更することも可能です。 
 # MAGIC
 # MAGIC なお、カスタムのEmbeddingモデルエンドポイントをDatabricks上にデプロイする手順は[こちら](https://github.com/hiouchiy/databricks-ml-examples/tree/master/llm-models/embedding/e5/multilingual-e5-large)を参照ください。
 

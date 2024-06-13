@@ -94,13 +94,13 @@ print("Vector Search Index Name: " + index_name)
 # MAGIC %md-sandbox
 # MAGIC ### チャットモデルの構築 （DBRX-instruct 基盤モデルへのクエリ）
 # MAGIC
-# MAGIC 今回は DBRX 基盤モデルを使って回答を生成します。
-# MAGIC
-# MAGIC Note: 複数のタイプのエンドポイントやラングチェーンモデルを使用することができます：
-# MAGIC
+# MAGIC 今回はDatabricksが提供する基盤モデルAPIから DBRX を使って回答を生成します。
+# MAGIC その他にも、以下のモデルエンドポイントを利用可能です。
 # MAGIC - Databricks Foundationモデル（今回使用するものです）
 # MAGIC - ファインチューニングしたモデル
 # MAGIC - 外部のモデルプロバイダ（Azure OpenAIなど）
+# MAGIC
+# MAGIC 参考として、日本語LLMのELYZA-7bをDatabricks上にエンドポイントとしてデプロイする手順は[こちら](https://github.com/hiouchiy/Pratical_RAG_Project/blob/main/Optional-Register_ELYZA_AI.py)をご参照ください。
 
 # COMMAND ----------
 
@@ -242,7 +242,7 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
         userId = model_input['id'][0]
         name, rank, birthday, since = self._get_user_info(userId)
 
-        #ベクター検索で質問と類似している情報を検索
+        # FAQデータからベクター検索を用いて質問と類似している情報を検索
         question = model_input['query'][0]
         docs = self._find_relevant_doc(question, rank)
 
