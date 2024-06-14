@@ -51,29 +51,20 @@
 
 # MAGIC %md
 # MAGIC   
-# MAGIC ###  このデモを動かすにはシークレットが必要です：
-# MAGIC Model Serving Endpoint は Vector Search Index を認証するためにシークレットを必要とします。 (see [Documentation](https://docs.databricks.com/en/security/secrets/secrets.html)).  <br/>
+# MAGIC ###  このデモを動かすにはシークレットの登録が必要です：
+# MAGIC Model Serving Endpoint は Vector Search インデックスへ接続するために、インデックスがホストされているベースURLとアクセストークンを必要とします。 (see [Documentation](https://docs.databricks.com/en/security/secrets/secrets.html)).  <br/>
 # MAGIC **Note: 共有のデモ・ワークスペースを使用していて、シークレットが設定されていることを確認した場合は、以下の手順を実行せず、その値を上書きしないでください。**<br/>
 # MAGIC
 # MAGIC - ラップトップまたはこのクラスタターミナルで[Databricks CLI](https://docs.databricks.com/en/dev-tools/cli/install.html) をセットアップする必要があります。 <br/>
 # MAGIC `pip install databricks-cli` <br/>
-# MAGIC - CLIを設定します。ワークスペースのURLとプロフィールページのPATトークンが必要です。e<br>
+# MAGIC - CLIを設定します。ワークスペースのURLとプロフィールページのPersonal Access Token(PAT)トークンが必要です。PATトークンの発行の仕方は[こちら](https://docs.databricks.com/ja/dev-tools/auth/pat.html#databricks-personal-access-tokens-for-workspace-users)をご参照ください。<br>
 # MAGIC `databricks configure`
 # MAGIC - dbdemosスコープを作成します。<br/>
 # MAGIC `databricks secrets create-scope dbdemos`
 # MAGIC - サービスプリンシパルのシークレットを保存します。これはモデルエンドポイントが認証するために使われます。これがデモ/テストである場合、あなたの[PAT token](https://docs.databricks.com/en/dev-tools/auth/pat.html)を利用できます。<br>
-# MAGIC `databricks secrets put-secret dbdemos rag_sp_token`
-# MAGIC
-# MAGIC *Note: サービスプリンシパルがVector Searchインデックスにアクセスできることを確認してください。:*
-# MAGIC
-# MAGIC ```
-# MAGIC spark.sql('GRANT USAGE ON CATALOG <catalog> TO `<YOUR_SP>`');
-# MAGIC spark.sql('GRANT USAGE ON DATABASE <catalog>.<db> TO `<YOUR_SP>`');
-# MAGIC from databricks.sdk import WorkspaceClient
-# MAGIC import databricks.sdk.service.catalog as c
-# MAGIC WorkspaceClient().grants.update(c.SecurableType.TABLE, <index_name>, 
-# MAGIC                                 changes=[c.PermissionsChange(add=[c.Privilege["SELECT"]], principal="<YOUR_SP>")])
-# MAGIC   ```
+# MAGIC `databricks secrets put-secret dbdemos databricks_token`
+# MAGIC - 加えて、このDataricksワークスペースのベースURL（https://xxx.cloud.databricks.com）も保存します。<br>
+# MAGIC `databricks secrets put-secret dbdemos databricks_host`
 
 # COMMAND ----------
 
