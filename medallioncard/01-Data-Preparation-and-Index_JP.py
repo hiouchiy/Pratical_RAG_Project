@@ -163,8 +163,9 @@ embeddings = [e for e in response.predictions]
 print(embeddings)
 
 # Databricksの基盤モデル「databricks-bge-large-en」への切り替えも簡単
+# embedding_endpoint_name = "databricks-bge-large-en"
 # response = deploy_client.predict(
-#   endpoint = "databricks-bge-large-en", 
+#   endpoint = embedding_endpoint_name, 
 #   inputs = {"input": ["Apache Sparkとはなんですか?", "ビッグデータとはなんですか？"]}
 # )
 # embeddings = [e for e in response.data]
