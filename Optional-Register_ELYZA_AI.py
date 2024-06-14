@@ -2,9 +2,8 @@
 # MAGIC %md 
 # MAGIC ### 実行環境:
 # MAGIC
-# MAGIC - A GPU, single cluster.
-# MAGIC - Databricks Runtime 13.3 ML and above
-# MAGIC - g5.8xlarge (1 worker)
+# MAGIC - Databricks Runtime 15.2 ML 以上
+# MAGIC - g5.8xlarge (single cluster)
 
 # COMMAND ----------
 
@@ -27,32 +26,37 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install databricks-vectorsearch==0.20 mlflow==2.8.0 databricks-sdk==0.12.0
+# MAGIC %pip install tf-keras
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 
 # DBTITLE 1,コンフィグ(環境に合わせて修正してください）
-# MAGIC %run ../config
+CATALOG = "japan_practical_demo"
+SCHEMA = "models"
 
 # COMMAND ----------
 
-# DBTITLE 1,カタログ初期化及びデモ用のインポートとヘルパーのインストール
-# MAGIC %run ../_resources/00-init $reset_all_data=false
+sql(f"CREATE CATALOG IF NOT EXISTS {CATALOG};")
+sql(f"USE CATALOG {CATALOG};")
+sql(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA};")
+sql(f"USE SCHEMA {SCHEMA};")
 
 # COMMAND ----------
 
 # DBTITLE 1,ダウンロードロケーションからモデルをダウンロード
-# リビジョンのコミットハッシュを固定し、アップローダーがモデルを変更する可能性があるため、再現性のために変更しないことを推奨します。
-# model_name = 'elyza/ELYZA-japanese-Llama-2-13b-instruct'
-model_name = 'elyza/ELYZA-japanese-Llama-2-13b-fast-instruct'
-
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 
+# model_name = 'elyza/ELYZA-japanese-Llama-2-13b-instruct'
+model_name = 'elyza/ELYZA-japanese-Llama-2-13b-fast-instruct'
+
 # Load model
-model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto", cache_dir="/local_disk0/.cache/huggingface/")
 tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(
+  model_name, 
+  torch_dtype="auto", 
+  cache_dir="/local_disk0/.cache/huggingface/")
 
 # COMMAND ----------
 
@@ -99,8 +103,8 @@ signature = infer_signature(
 with mlflow.start_run() as run:  
   mlflow.transformers.log_model(
     transformers_model={
-      "model": model,
       "tokenizer": tokenizer,
+      "model": model,
     },
     task = "text-generation",
     artifact_path="model",
@@ -131,7 +135,7 @@ mlflow.set_registry_uri("databricks-uc")
 
 #registered_name = "models.default.llama2_7b_completions" # Note that the UC model name follows the pattern <catalog_name>.<schema_name>.<model_name>, corresponding to the catalog, schema, and registered model name
 
-registered_name = f"{catalog}.{db}.ELYZA-japanese-Llama-2-13b-fast-instruct"
+registered_name = f"{CATALOG}.{SCHEMA}.ELYZA-japanese-Llama-2-13b-fast-instruct"
 print(registered_name)
 
 result = mlflow.register_model(
@@ -189,24 +193,8 @@ print(story[0])
 
 # COMMAND ----------
 
-# サービングエンドポイントの名前を指定します。
-endpoint_name = 'ELYZA-JP-2-13b_endpoint'
-
-# URLとワークスペースに接続用のトークンを取得
-databricks_url = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().getOrElse(None)
-token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().getOrElse(None)
-
-# COMMAND ----------
-
-print(registered_name)
-
-# COMMAND ----------
-
 import requests
 import json
-
-# Set the name of the MLflow endpoint
-endpoint_name = "ELYZA-JP-2-13b"
 
 # Name of the registered MLflow model
 model_name = registered_name
@@ -214,38 +202,41 @@ model_name = registered_name
 # Get the latest version of the MLflow model
 model_version = result.version
 
-# Minimum desired provisioned throughput
-min_provisioned_throughput = 480
-
-# Maximum desired provisioned throughput
-max_provisioned_throughput = 480
-
 # Get the API endpoint and token for the current notebook context
-API_ROOT = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().get()
+API_ROOT = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().get() 
 API_TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
-
-# send the POST request to create the serving endpoint
-data = {
-    "name": endpoint_name,
-    "config": {
-        "served_models": [
-            {
-                "model_name": model_name,
-                "model_version": model_version,
-                "min_provisioned_throughput": min_provisioned_throughput,
-                "max_provisioned_throughput": max_provisioned_throughput,
-            }
-        ]
-    },
-}
 
 headers = {"Context-Type": "text/json", "Authorization": f"Bearer {API_TOKEN}"}
 
-response = requests.post(
-    url=f"{API_ROOT}/api/2.0/serving-endpoints", json=data, headers=headers
-)
+response = requests.get(url=f"{API_ROOT}/api/2.0/serving-endpoints/get-model-optimization-info/{model_name}/{model_version}", headers=headers)
 
 print(json.dumps(response.json(), indent=4))
+
+# COMMAND ----------
+
+from mlflow.deployments import get_deploy_client
+
+# !export DATABRICKS_HOST = f"{API_ROOT}/api/2.0/serving-endpoints"
+# !export DATABRICKS_TOKEN = API_TOKEN
+
+client = get_deploy_client("databricks")
+
+endpoint_name = "elyza-japanese-llama2-13b-endpoint"
+endpoint = client.create_endpoint(
+    name=endpoint_name,
+    config={
+        "served_entities": [
+            {
+                "entity_name": model_name,
+                "entity_version": model_version,
+                "min_provisioned_throughput": response.json()['throughput_chunk_size'],
+                "max_provisioned_throughput": response.json()['throughput_chunk_size'],
+            }
+        ]
+    },
+)
+
+print(json.dumps(endpoint, indent=4))
 
 # COMMAND ----------
 
@@ -257,11 +248,23 @@ print(json.dumps(response.json(), indent=4))
 
 # COMMAND ----------
 
+chat_response = client.predict(
+    endpoint=endpoint_name,
+    inputs={
+        "messages": [
+            {
+              "role": "user",
+              "content": prompt
+            }
+        ],
+        "temperature": 0.5,
+        "max_tokens": 128
+    }
+)
+
+print(chat_response)
+
+# COMMAND ----------
+
 # MAGIC %md 
-# MAGIC ## 次のステップ RAGを使ったチャットボットモデルのデプロイ
-# MAGIC
-# MAGIC Databricks Lakehouse AIを使えば、数行のコードと設定だけで、ドキュメントのインジェストと準備、Vector Searchインデックスのデプロイが簡単にできます。
-# MAGIC
-# MAGIC これにより、データプロジェクトが簡素化、高速化され、次のステップである、手の込んだプロンプトの追加によるリアルタイムチャットボットのエンドポイントの作成に集中できるようになります。
-# MAGIC
-# MAGIC [04_Deploy-RAG-Chatbot-Model-elyza_JP]($./04_Deploy-RAG-Chatbot-Model-elyza_JP) チャットボットのエンドポイントを作成し、デプロイするためのノートブックを開きます
+# MAGIC ## 以上です。お疲れ様でした！
