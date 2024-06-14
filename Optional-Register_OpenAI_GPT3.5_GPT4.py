@@ -1,10 +1,15 @@
 # Databricks notebook source
-# MAGIC %pip install -U langchain_community mlflow[genai]==2.9.0
+# MAGIC %md
+# MAGIC ノードタイプ：サーバーレス
+
+# COMMAND ----------
+
+# MAGIC %pip install -U langchain==0.1.5 mlflow==2.10.1
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 
-from langchain_community.chat_models import ChatDatabricks
+from langchain.chat_models import ChatDatabricks
 from langchain_core.messages import HumanMessage
 from mlflow.deployments import get_deploy_client
 from requests.exceptions import HTTPError
@@ -58,5 +63,5 @@ regster_or_replace_openai_model_as_external_model(
 chat = ChatDatabricks(endpoint="japan-practical-demo-openai-gpt35", temperature=0.1)
 print(chat([HumanMessage(content="hello")]))
 
-chat = ChatDatabricks(endpoint="japan-practical-demo-openai-gpt35", temperature=0.1)
+chat = ChatDatabricks(endpoint="japan-practical-demo-openai-gpt4", temperature=0.1)
 print(chat([HumanMessage(content="hello")]))
