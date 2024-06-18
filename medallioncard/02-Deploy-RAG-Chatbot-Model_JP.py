@@ -202,7 +202,7 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
 
         return name, rank, birthday, since
     
-    def _build_prompt(self, name, rank, birthday, since, docs):
+    def _build_prompt(self, name, rank, birthday, since, docs, question):
         """
         プロンプトの構築
         """
@@ -239,7 +239,7 @@ class ChatbotRAGOrchestratorApp(mlflow.pyfunc.PythonModel):
         docs = self._find_relevant_doc(question, rank)
 
         # プロンプトの構築
-        prompt = self._build_prompt(name, rank, birthday, since, docs)
+        prompt = self._build_prompt(name, rank, birthday, since, docs, question)
 
         # LLMに回答を生成させる
         from langchain_core.messages import HumanMessage
