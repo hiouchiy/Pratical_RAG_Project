@@ -215,6 +215,21 @@ agents.set_review_instructions(model_name, review_instructions)
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### 関係者にMosaic AIエージェント評価アプリへのアクセス権を与える
+# MAGIC 関係者にレビューアプリの使用権限を付与します。アクセスを簡単にするため、関係者はDatabricksアカウントを持っている必要はありません。
+
+# COMMAND ----------
+
+from databricks import agents
+user_list = ["admins"]
+# Set the permissions.
+agents.set_permissions(model_name=model_name, users=user_list, permission_level=agents.PermissionLevel.CAN_QUERY)
+
+print(f"Share this URL with your stakeholders: {deployment_info.review_app_url}")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC エンドポイントのデプロイ状況は[Serving Endpoint UI](#/mlflow/endpoints)で確認できます。デプロイ完了まで数分程度要します。
 # MAGIC
 # MAGIC デプロイ完了後、PythonでRESTクエリを実行してみましょう。
