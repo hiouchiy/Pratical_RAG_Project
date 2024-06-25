@@ -23,10 +23,8 @@ embedding_endpoint_name = "multilingual-e5-large-embedding"
 instruct_endpoint_name = "databricks-dbrx-instruct"
 user_endpoint_name = "medallioncard-user-info-fs-endpoint"
 
-databricks_token_secrets_scope = "dbdemos"
+databricks_token_secrets_scope = "medallioncard"
 databricks_token_secrets_key = "databricks_token"
-databricks_host_secrets_scope = "dbdemos"
-databricks_host_secrets_key = "databricks_host"
 
 print('VECTOR_SEARCH_ENDPOINT_NAME =',VECTOR_SEARCH_ENDPOINT_NAME)
 print('catalog =',catalog)

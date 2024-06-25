@@ -470,6 +470,49 @@ print(response['outputs'][0])
 
 # COMMAND ----------
 
+# MAGIC %md-sandbox
+# MAGIC ### チャットモデルの構築 （DBRX-instruct 基盤モデルへのクエリ）
+# MAGIC _（※この操作はGUIでも実施可能）_
+# MAGIC
+# MAGIC 今回はDatabricksが提供する基盤モデルAPIから DBRX を使って回答を生成します。
+# MAGIC その他にも、以下のモデルエンドポイントを利用可能です。
+# MAGIC - Databricks Foundationモデル（今回使用するものです）
+# MAGIC - ファインチューニングしたモデル
+# MAGIC - 外部のモデルプロバイダ（Azure OpenAIなど）
+# MAGIC
+# MAGIC 参考として、日本語LLMのELYZA-7bをDatabricks上にエンドポイントとしてデプロイする手順は[こちら](https://github.com/hiouchiy/Pratical_RAG_Project/blob/main/Optional-Register_ELYZA_AI.py)をご参照ください。
+
+# COMMAND ----------
+
+# Databricks Foundation LLMモデルのテスト
+from langchain.chat_models import ChatDatabricks
+from langchain_core.messages import HumanMessage, SystemMessage
+
+##############################################
+# chat_modelモデルの定義(カスタムモデルを使用)
+##############################################
+chat_model = ChatDatabricks(
+  endpoint=instruct_endpoint_name, 
+  max_tokens = 2000, 
+  temprature = 0.1)
+
+messages = [
+    SystemMessage(content="You're a helpful assistant"),
+    HumanMessage(content="What is a mixture of experts model?"),
+]
+
+response = chat_model.invoke(messages)
+print(response)
+
+print(f"Test chat model: {response}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ---
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC ## （おまけ）DSPyのDatabricksRMでベクトル検索
 
