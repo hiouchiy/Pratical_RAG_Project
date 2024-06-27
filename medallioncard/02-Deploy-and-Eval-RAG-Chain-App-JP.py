@@ -6,23 +6,16 @@
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC # RAGによるチャットボットの作成
+# MAGIC # RAGエージェントの作成／デプロイ／評価
 # MAGIC
-# MAGIC 前回の[01-Data-Preparation-and-Index]($./01-Data-Preparation-and-Index [DO NOT EDIT])ノートブックで、RAGアプリケーションに必要なコンポーネントを準備しました。具体的には以下の通りです。
+# MAGIC 前回の[01-Data-Preparation-and-Index]($./01-Data-Preparation-and-Index [DO NOT EDIT])ノートブックで、RAGアプリケーションに必要な以下のコンポーネントを準備しました。
 # MAGIC - ユーザーマスタのオンラインテーブル
 # MAGIC - FAQデータのベクトルインデックス (Embeddingモデル含む)
 # MAGIC - 文章生成LLM（DBRX）のエンドポイント
 # MAGIC
-# MAGIC このノートブックでは、これらコンポーネントを繋ぎ合わせて、ユーザーからの質問に適切に回答するRAGチェーン・アプリ（オーケストレーターとも呼ばれる）を作成し、それをエンドポイントとしてデプロイします。
+# MAGIC このノートブックでは、Mosaic AI Agent Frameworkを使用して、これらコンポーネントを繋ぎ合わせてユーザーからの質問に適切に回答する RAGエージェント・アプリ（チェーンやオーケストレーターとも呼ばれる）を作成し、それをエンドポイントとしてデプロイします。
 # MAGIC
-# MAGIC RAGチェーン・アプリの処理フローは以下のようになります：
-# MAGIC
-# MAGIC 1. ユーザーから質問とユーザーIDが RAGチェーン・アプリ のエンドポイントへ送信される
-# MAGIC 1. RAGチェーン・アプリにて、ユーザーIDをキーとして、ユーザーマスタから当該ユーザーの属性情報を取得
-# MAGIC 1. RAGチェーン・アプリにて、質問に関連した情報を抜き出すべく、ベクトルインデックスに対して類似検索を実施
-# MAGIC 1. RAGチェーン・アプリにて、ユーザー属性情報、質問関連情報、質問を組み合わせてプロンプトを作成
-# MAGIC 1. RAGチェーン・アプリにて、プロンプトを文章生成LLM（DBRX）のエンドポイントへ送信
-# MAGIC 1. ユーザーにLLMの出力を返す
+# MAGIC さらに、Mosaic AI Agent Evaluationを使用して、RAGエージェント・アプリの評価を行います。
 
 # COMMAND ----------
 
@@ -37,7 +30,7 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### RAGチェーン・アプリで使用されるパラメータをYAMLファイルとして保存
+# MAGIC ### RAGエージェント・アプリで使用されるパラメータをYAMLファイルとして保存
 
 # COMMAND ----------
 
@@ -60,20 +53,8 @@ model_config = mlflow.models.ModelConfig(development_config=config_file_name)
 
 # COMMAND ----------
 
-# MAGIC %md-sandbox
-# MAGIC
-# MAGIC ### Chainオーケストレーターの構築
-# MAGIC
-# MAGIC それでは、フロントエンドアプリから質問を取得し、FAQデータ（ベクトル検索）とカード会員マスタ（特徴量サービング）から関連情報を検索し、プロンプトを拡張するレトリーバーと、回答を作成するチャットモデルを1つのチェーンに統合しましょう。
-# MAGIC
-# MAGIC 必要に応じて、様々なテンプレートを試し、AIアシスタントの口調や性格を皆様の要求に合うように調整してください。
-
-# COMMAND ----------
-
 # MAGIC %md
-# MAGIC ### モデルをUnityカタログ内のモデルレジストリに保存
-# MAGIC
-# MAGIC モデルの準備ができたので、Unity Catalogに登録します
+# MAGIC ### RAGエージェント・アプリをUnity Catalogに登録
 
 # COMMAND ----------
 
@@ -175,10 +156,10 @@ model.predict({"messages": [{"role": "user", "content": "現在のランクか�
 # COMMAND ----------
 
 # MAGIC %md 
-# MAGIC ### チャットモデルをサービング・エンドポイントとしてデプロイ
+# MAGIC ### RAGエージェント・アプリをサービング・エンドポイントとしてデプロイ
 # MAGIC
-# MAGIC 最後のステップは、チェーンをエンドポイントとしてデプロイすることです。
-# MAGIC Databricks の Agentライブラリを使用します。
+# MAGIC 最後のステップは、エージェント・アプリをエンドポイントとしてデプロイすることです。
+# MAGIC Databricks Agentライブラリを使用します。
 # MAGIC
 # MAGIC
 # MAGIC これで、チェーンの評価、および、フロントエンドアプリからリクエストを送信できるようになります。
@@ -215,8 +196,8 @@ agents.set_review_instructions(model_name, review_instructions)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Mosaic AIエージェント評価アプリを使用して人手でフィードバックを行う
-# MAGIC 関係者にMosaic AIエージェント評価アプリへのアクセス権を与え、フィードバックを行ってもらいましょう。
+# MAGIC ### Mosaic AI Agent Evaluationのレビューアプリを使用して人手でフィードバックを行う
+# MAGIC 関係者にMosaic AI Agent Evaluation のレビューアプリ へのアクセス権を与え、フィードバックを行ってもらいましょう。
 # MAGIC アクセスを簡単にするため、関係者はDatabricksアカウントを持っている必要はありません。
 
 # COMMAND ----------
@@ -306,7 +287,7 @@ print(json.dumps(response.json(), ensure_ascii=False))
 
 # MAGIC %md
 # MAGIC
-# MAGIC ### おまけ：GradioをUIとして使ってみましょう！
+# MAGIC ### おまけ：GUIからアクセスしてみましょう！
 # MAGIC
 # MAGIC Gradio で作成したUIからアクセスすることもできます。([License](https://github.com/gradio-app/gradio/blob/main/LICENSE))。
 # MAGIC
