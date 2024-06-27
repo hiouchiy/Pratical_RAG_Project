@@ -215,14 +215,15 @@ agents.set_review_instructions(model_name, review_instructions)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 関係者にMosaic AIエージェント評価アプリへのアクセス権を与える
-# MAGIC 関係者にレビューアプリの使用権限を付与します。アクセスを簡単にするため、関係者はDatabricksアカウントを持っている必要はありません。
+# MAGIC ### Mosaic AIエージェント評価アプリを使用して人手でフィードバックを行う
+# MAGIC 関係者にMosaic AIエージェント評価アプリへのアクセス権を与え、フィードバックを行ってもらいましょう。
+# MAGIC アクセスを簡単にするため、関係者はDatabricksアカウントを持っている必要はありません。
 
 # COMMAND ----------
 
 from databricks import agents
-user_list = ["admins"]
-# Set the permissions.
+
+user_list = ["someone@databricks.com"]
 agents.set_permissions(model_name=model_name, users=user_list, permission_level=agents.PermissionLevel.CAN_QUERY)
 
 print(f"Share this URL with your stakeholders: {deployment_info.review_app_url}")
@@ -231,8 +232,56 @@ print(f"Share this URL with your stakeholders: {deployment_info.review_app_url}"
 
 # MAGIC %md
 # MAGIC エンドポイントのデプロイ状況は[Serving Endpoint UI](#/mlflow/endpoints)で確認できます。デプロイ完了まで数分程度要します。
+# MAGIC なお、Feedbackというのが、レビューアプリ用のエンドポイントです。
 # MAGIC
-# MAGIC デプロイ完了後、PythonでRESTクエリを実行してみましょう。
+# MAGIC デプロイ完了後、レビューアプリのURLにアクセスして人手によるフィードバックを行いましょう。
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Mosaic AI Agent Evaluation "LLM-as-a-judge" を使用してRAGエージェントの自動評価を行う
+
+# COMMAND ----------
+
+import mlflow
+import pandas as pd
+eval_set  = [
+    {
+      "request_id": "1",
+      "request": "私の現在のランクには空港ラウンジ特典はついていますか？",
+    },
+    {
+      "request_id": "2",
+      "request": "現在のランクから一つ上のランクに行くためにはどういう条件が必要ですか？",
+    },
+    {
+      "request_id": "3",
+      "request": "私のランクの特典を全て教えてください。",
+    }
+]
+#### Convert dictionary to a pandas DataFrame
+eval_set_df = pd.DataFrame(eval_set)
+
+
+model_name = f"{catalog}.{dbName}.{registered_model_name}"
+
+###
+# mlflow.evaluate() call
+###
+evaluation_results = mlflow.evaluate(
+    data=eval_set_df,
+    model=f"models:/{model_name}/{uc_model_info.version}",
+    model_type="databricks-agent",
+)
+
+# COMMAND ----------
+
+evaluation_results.tables["eval_results"]
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 最後にデプロイされたRAGエージェントにRESTクライアントからアクセスしてみましょう
 
 # COMMAND ----------
 
