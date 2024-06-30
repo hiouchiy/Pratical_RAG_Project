@@ -24,6 +24,7 @@
 
 import os
 from typing import Dict
+from dataclasses import asdict
 import time
 
 import pandas as pd
@@ -42,16 +43,14 @@ from openai import OpenAI
 
 # COMMAND ----------
 
-model_config = mlflow.models.ModelConfig(development_config="rag_chain_config.yaml")
-
-# COMMAND ----------
-
-class ChatbotRAGOrchestratorApp(PythonModel):
+class MedallionCardRAGAgentApp(PythonModel):
 
     def __init__(self):
         """
         コンストラクタ
         """
+
+        self.model_config = mlflow.models.ModelConfig(development_config="rag_chain_config.yaml")
 
         try:
             # サービングエンドポイントのホストに"DB_MODEL_SERVING_HOST_URL"が自動設定されるので、その内容をDATABRICKS_HOSTにも設定
@@ -61,21 +60,21 @@ class ChatbotRAGOrchestratorApp(PythonModel):
 
         vsc = VectorSearchClient(disable_notice=True)
         self.vs_index = vsc.get_index(
-            endpoint_name=model_config.get("vector_search_endpoint_name"),
-            index_name=model_config.get("vector_search_index_name")
+            endpoint_name=self.model_config.get("vector_search_endpoint_name"),
+            index_name=self.model_config.get("vector_search_index_name")
         )
 
         # 特徴量サービングアクセス用クライアントの取得
         self.deploy_client = mlflow.deployments.get_deploy_client("databricks")
 
         # LLM基盤モデルのエンドポイントのクライアントを取得
-        self.chat_model = ChatDatabricks(
-            endpoint=model_config.get("llm_endpoint_name"), 
-            max_tokens = 2000)
-        # self.openai_client = OpenAI(
-        #     api_key=os.environ.get("DATABRICKS_TOKEN"),
-        #     base_url=os.environ.get("DATABRICKS_HOST") + "/serving-endpoints",
-        # )
+        # self.chat_model = ChatDatabricks(
+        #     endpoint=model_config.get("llm_endpoint_name"), 
+        #     max_tokens = 2000)
+        self.chat_model = OpenAI(
+            api_key=os.environ.get("DATABRICKS_TOKEN"),
+            base_url=os.environ.get("DATABRICKS_HOST") + "/serving-endpoints",
+        )
 
         # システムプロンプトを準備
         self.SYSTEM_MESSAGE = SystemMessage(content="【ユーザー情報】と【参考情報】のみを参考にしながら【質問】にできるだけ正確に答えてください。わからない場合や、質問が適切でない場合は、分からない旨を答えてください。【参考情報】に記載されていない事実を答えるのはやめてください。")
@@ -95,8 +94,8 @@ class ChatbotRAGOrchestratorApp(PythonModel):
 {question}"""
         self.HUMAN_MESSAGE = HumanMessagePromptTemplate.from_template(human_template)
         
-        # chatプロンプトテンプレートの準備
-        self.CHAT_PROMPT = ChatPromptTemplate.from_messages([self.SYSTEM_MESSAGE, self.HUMAN_MESSAGE])
+        # # chatプロンプトテンプレートの準備
+        # self.CHAT_PROMPT = ChatPromptTemplate.from_messages([self.SYSTEM_MESSAGE, self.HUMAN_MESSAGE])
         
     def _find_relevant_doc(self, question, rank, num_results = 10, relevant_threshold = 0.7):
         """
@@ -125,7 +124,7 @@ class ChatbotRAGOrchestratorApp(PythonModel):
         """
 
         result = self.deploy_client.predict(
-          endpoint=model_config.get("user_info_endpoint_name"),
+          endpoint=self.model_config.get("user_info_endpoint_name"),
           inputs={"dataframe_records": [{"id": user_id}]},
         )
         name = result['outputs'][0]['name']
@@ -144,14 +143,25 @@ class ChatbotRAGOrchestratorApp(PythonModel):
         for doc in docs:
           context = context + doc['response'] + "\n\n"
 
-        prompt = self.CHAT_PROMPT.format_prompt(
+        human_message = self.HUMAN_MESSAGE.format_messages(
           name=name, 
           rank=rank, 
           birthday=birthday, 
           since=since, 
           context=context, 
           question=question
-        ).to_messages()
+        )
+    
+        prompt=[
+            {
+                "role": "system",
+                "content": self.SYSTEM_MESSAGE.content
+            },
+            {
+                "role": "user",
+                "content": human_message[0].content,
+            }
+        ]
 
         return prompt
 
@@ -186,45 +196,35 @@ class ChatbotRAGOrchestratorApp(PythonModel):
 
         # LLMに回答を生成させる
         with mlflow.start_span(name="generate_answer") as span:
-            response = self.chat_model.invoke(prompt)
+            # response = self.chat_model.invoke(prompt)
+            response = self.chat_model.chat.completions.create(
+                model=self.model_config.get("llm_endpoint_name"),
+                messages=prompt,
+                max_tokens=2000,
+                temperature=0.1
+            )
             span.set_inputs({"question": question, "prompt": prompt})
             span.set_outputs({"answer": response})
         
         
-        # 回答データを整形して返す
-        # return asdict(
-        #     ChatCompletionResponse(
-        #         choices=[ChainCompletionChoice(message=response.content)]
-        #     )
-        # )
+        # 回答データを整形して返す.
         # ChatCompletionResponseの形式で返さないと後々エラーとなる。
-        # TODO:もっとスマートな方法がないかは要確認
-        return {
-            "id": response.id,
-            "created": int(time.time()),
-            "choices": [
-                {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": response.content
-                },
-                "finish_reason": None, 
-                }
-            ],
-            "usage": {
-                "prompt_tokens": response.response_metadata["prompt_tokens"],
-                "completion_tokens": response.response_metadata["completion_tokens"],
-                "total_tokens": response.response_metadata["total_tokens"],
-            }
-        }
+        return response.to_dict()
 
-mlflow.models.set_model(model=ChatbotRAGOrchestratorApp())
+mlflow.models.set_model(model=MedallionCardRAGAgentApp())
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## AI Agentをテスト
+
+# COMMAND ----------
+
+# 開発用
+# API_ROOT = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().get()
+# os.environ["DATABRICKS_HOST"] = API_ROOT
+# API_TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+# os.environ["DATABRICKS_TOKEN"] = API_TOKEN
 
 # COMMAND ----------
 
@@ -234,14 +234,14 @@ input_example = {'messages': [
   {'role': 'user', 'content': '私の現在のランクには空港ラウンジ特典はついていますか？'}
 ]}
 
-# rag_model = ChatbotRAGOrchestratorApp()
+# rag_model = MedallionCardRAGAgentApp()
 # rag_model.predict(None, model_input=input_example, params={"id": ["222"]})
 
 # COMMAND ----------
 
 input_example = {"messages": [{"role": "user", "content": "現在のランクから一つ上のランクに行くためにはどういった条件が必要ですか？"}]}
 
-# rag_model = ChatbotRAGOrchestratorApp()
+# rag_model = MedallionCardRAGAgentApp()
 # rag_model.predict(None, model_input=input_example)
 
 # COMMAND ----------

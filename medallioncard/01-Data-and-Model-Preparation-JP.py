@@ -7,16 +7,18 @@
 
 # MAGIC %md-sandbox
 # MAGIC
-# MAGIC # RAGのためのデータ準備
+# MAGIC # RAGのためのデータとモデルの準備
 # MAGIC
-# MAGIC ### 独自データをベクトルインデックス化、または、オンラインテーブルとしてサービングする
+# MAGIC このノートブックでは、チャットボットの回答精度を向上させるため、独自のドメイン固有データを用いて、ベクトル検索のインデックス、および、オンラインテーブルを作成します。
 # MAGIC
-# MAGIC このノートブックでは、チャットボットがより良い回答を提供できるように、独自のドメイン固有なデータを用いて、Vector Searchのインデックスを作成します。
-# MAGIC
-# MAGIC この例では架空のクレジット会社「メダリオンカード株式会社」を例に取り、以下のドキュメントを使用します：
+# MAGIC 具体的には、架空のクレジット会社「メダリオンカード株式会社」を例に取り、以下のドキュメントを使用します：
 # MAGIC
 # MAGIC - カード会員向けFAQデータ（非構造化データ）　→ ベクトル検索用インデックス化
 # MAGIC - カード会員マスタ（構造化データ）　→ オンラインテーブル化
+# MAGIC
+# MAGIC さらに、回答生成に用いるLLMとして以下のものを使用します。
+# MAGIC
+# MAGIC - DBRX Instruct (データブリックス上で基盤モデルAPIとして提供中)
 
 # COMMAND ----------
 
@@ -25,7 +27,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install mlflow==2.10.1 lxml==4.9.3 transformers==4.30.2 langchain==0.1.5 databricks-vectorsearch==0.22 databricks-sdk==0.28.0 databricks-feature-store==0.17.0
+# MAGIC %pip install mlflow==2.10.1 lxml==4.9.3 transformers==4.30.2 langchain==0.1.5 databricks-vectorsearch==0.22 databricks-sdk==0.28.0 databricks-feature-store==0.17.0 openai
 # MAGIC %pip install dspy-ai -U
 # MAGIC dbutils.library.restartPython()
 
@@ -471,7 +473,7 @@ print(response['outputs'][0])
 # COMMAND ----------
 
 # MAGIC %md-sandbox
-# MAGIC ### チャットモデルの構築 （DBRX-instruct 基盤モデルへのクエリ）
+# MAGIC ## ステップ3. 回答生成LLMの準備
 # MAGIC _（※この操作はGUIでも実施可能）_
 # MAGIC
 # MAGIC 今回はDatabricksが提供する基盤モデルAPIから DBRX を使って回答を生成します。
@@ -484,6 +486,11 @@ print(response['outputs'][0])
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### LangchainのChatDatabricksクラスを使用する場合
+
+# COMMAND ----------
+
 # Databricks Foundation LLMモデルのテスト
 from langchain.chat_models import ChatDatabricks
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -493,16 +500,52 @@ from langchain_core.messages import HumanMessage, SystemMessage
 ##############################################
 chat_model = ChatDatabricks(
   endpoint=instruct_endpoint_name, 
-  max_tokens = 2000, 
-  temprature = 0.1)
+  max_tokens = 2000,
+  temperature=0.1)
 
 messages = [
-    SystemMessage(content="You're a helpful assistant"),
-    HumanMessage(content="What is a mixture of experts model?"),
+    SystemMessage(content="You're a helpful assistant. You have to answer all questions in Japanese."),
+    HumanMessage(content="Mixture-of-experts（MoE）モデルとは何ですか?"),
 ]
 
 response = chat_model.invoke(messages)
-print(response)
+
+print(f"Test chat model: {response}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### OpenAIのライブラリーを使用する場合
+
+# COMMAND ----------
+
+import os
+import openai
+from openai import OpenAI
+
+API_ROOT = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().get() 
+API_TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+
+client = OpenAI(
+    api_key=API_TOKEN,
+    base_url=f"{API_ROOT}/serving-endpoints"
+)
+
+response = client.chat.completions.create(
+    model=instruct_endpoint_name,
+    messages=[
+      {
+        "role": "system",
+        "content": "You're a helpful assistant. You have to answer all questions in Japanese."
+      },
+      {
+        "role": "user",
+        "content": "Mixture-of-experts（MoE）モデルとは何ですか?",
+      }
+    ],
+    max_tokens=2000,
+    temperature=0.1
+)
 
 print(f"Test chat model: {response}")
 

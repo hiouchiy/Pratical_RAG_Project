@@ -49,7 +49,222 @@ try:
         yaml.dump(rag_chain_config, f)
 except:
     print('pass to work on build job')
-model_config = mlflow.models.ModelConfig(development_config=config_file_name)
+
+# COMMAND ----------
+
+import os
+
+API_ROOT = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().get()
+os.environ["DATABRICKS_HOST"] = API_ROOT
+API_TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
+os.environ["DATABRICKS_TOKEN"] = API_TOKEN
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### RAGエージェントを実装する
+# MAGIC
+# MAGIC このデモではpyfunc.PythonModelベースの実装をします。
+# MAGIC
+# MAGIC 実装、および動作確認後、このセルのコードを以下のマジックコマンドを使用して.pyファイルとして書き出します。
+# MAGIC
+# MAGIC %%writefile chain.py
+
+# COMMAND ----------
+
+# %%writefile chain.py
+import os
+
+import pandas as pd
+
+import mlflow
+import mlflow.deployments
+
+from databricks.vector_search.client import VectorSearchClient
+from langchain_core.prompts.chat import HumanMessagePromptTemplate
+from openai import OpenAI
+
+class MedallionCardRAGAgentApp(mlflow.pyfunc.PythonModel):
+
+    def __init__(self):
+        """
+        コンストラクタ
+        """
+
+        self.model_config = mlflow.models.ModelConfig(development_config="rag_chain_config.yaml")
+
+        try:
+            # サービングエンドポイントのホストに"DB_MODEL_SERVING_HOST_URL"が自動設定されるので、その内容をDATABRICKS_HOSTにも設定
+            os.environ["DATABRICKS_HOST"] = os.environ["DB_MODEL_SERVING_HOST_URL"]
+        except:
+            pass
+
+        vsc = VectorSearchClient(disable_notice=True)
+        self.vs_index = vsc.get_index(
+            endpoint_name=self.model_config.get("vector_search_endpoint_name"),
+            index_name=self.model_config.get("vector_search_index_name")
+        )
+
+        # 特徴量サービングアクセス用クライアントの取得
+        self.deploy_client = mlflow.deployments.get_deploy_client("databricks")
+
+        # LLM基盤モデルのエンドポイントのクライアントを取得
+        self.chat_model = OpenAI(
+            api_key=os.environ.get("DATABRICKS_TOKEN"),
+            base_url=os.environ.get("DATABRICKS_HOST") + "/serving-endpoints",
+        )
+
+        # システムプロンプトを準備
+        self.SYSTEM_MESSAGE = "【ユーザー情報】と【参考情報】のみを参考にしながら【質問】にできるだけ正確に答えてください。わからない場合や、質問が適切でない場合は、分からない旨を答えてください。【参考情報】に記載されていない事実を答えるのはやめてください。"
+
+        # ヒューマンプロンプトテンプレートを準備
+        human_template = """【ユーザー情報】
+名前：{name}
+ランク：{rank}
+生年月日：{birthday}
+入会日：{since}
+
+
+【参考情報】
+{context}
+
+【質問】
+{question}"""
+        self.HUMAN_MESSAGE = HumanMessagePromptTemplate.from_template(human_template)
+
+        
+    def _find_relevant_doc(self, question, rank, num_results = 10, relevant_threshold = 0.7):
+        """
+        ベクター検索インデックスにリクエストを送信し、類似コンテンツを検索
+        """
+
+        results = self.vs_index.similarity_search(
+            query_text=question,
+            columns=["usertype", "query", "response"],
+            num_results=num_results,
+            filters={"usertype": ("general", rank)})
+        
+        docs = results.get('result', {}).get('data_array', [])
+
+        #関連性スコアでフィルタリングします。0.7以下は、関連性の高いコンテンツがないことを意味する
+        returned_docs = []
+        for doc in docs:
+          if doc[-1] > relevant_threshold:
+            returned_docs.append({"query": doc[1], "response": doc[2]})
+
+        return returned_docs
+    
+
+    def _get_user_info(self, user_id):
+        """
+        カード会員マスタから当該ユーザーの属性情報を取得
+        """
+
+        result = self.deploy_client.predict(
+          endpoint=self.model_config.get("user_info_endpoint_name"),
+          inputs={"dataframe_records": [{"id": user_id}]},
+        )
+        name = result['outputs'][0]['name']
+        rank = result['outputs'][0]['type']
+        birthday = result['outputs'][0]['birthday']
+        since = result['outputs'][0]['since']
+
+        return name, rank, birthday, since
+    
+
+    def _build_prompt(self, name, rank, birthday, since, docs, question):
+        """
+        プロンプトの構築
+        """
+
+        context = ""
+        for doc in docs:
+          context = context + doc['response'] + "\n\n"
+
+        human_message = self.HUMAN_MESSAGE.format_messages(
+          name=name, 
+          rank=rank, 
+          birthday=birthday, 
+          since=since, 
+          context=context, 
+          question=question
+        )
+    
+        prompt=[
+            {
+                "role": "system",
+                "content": self.SYSTEM_MESSAGE
+            },
+            {
+                "role": "user",
+                "content": human_message[0].content,
+            }
+        ]
+
+        return prompt
+
+
+    @mlflow.trace(name="predict_rag")
+    def predict(self, context, model_input, params=None):
+        """
+        推論メイン関数
+        """
+
+        if isinstance(model_input, pd.DataFrame):
+            model_input = model_input.to_dict(orient="records")[0]
+        
+        # カード会員マスタから当該ユーザーの属性情報を取得
+        with mlflow.start_span(name="_get_user_info") as span:
+            userId = params["id"][0] if params else "111"
+            name, rank, birthday, since = self._get_user_info(userId)
+            span.set_inputs({"userId": userId})
+            span.set_outputs({"name": name, "rank": rank, "birthday": birthday, "since": since})
+
+        # FAQデータからベクター検索を用いて質問と類似している情報を検索
+        with mlflow.start_span(name="_find_relevant_doc") as span:
+            question = model_input["messages"][-1]["content"]
+            docs = self._find_relevant_doc(question, rank)
+            span.set_inputs({"question": question, "rank": rank})
+            span.set_outputs({"docs": docs})
+
+        # プロンプトの構築
+        with mlflow.start_span(name="_build_prompt") as span:
+            prompt = self._build_prompt(name, rank, birthday, since, docs, question)
+            span.set_inputs({"question": question, "docs": docs, "name": name, "rank": rank, "birthday": birthday, "since": since})
+            span.set_outputs({"prompt": prompt})
+
+        # LLMに回答を生成させる
+        with mlflow.start_span(name="generate_answer") as span:
+            response = self.chat_model.chat.completions.create(
+                model=self.model_config.get("llm_endpoint_name"),
+                messages=prompt,
+                max_tokens=2000,
+                temperature=0.1
+            )
+            span.set_inputs({"question": question, "prompt": prompt})
+            span.set_outputs({"answer": response})
+        
+        
+        # 回答データを整形して返す.
+        # ChatCompletionResponseの形式で返さないと後々エラーとなる。
+        return response.to_dict()
+
+
+mlflow.models.set_model(model=MedallionCardRAGAgentApp())
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### RAGエージェントをテストする
+
+# COMMAND ----------
+
+input_example = {
+  "messages": [{"role": "user", "content": "現在のランクから一つ上のランクに行くためにはどういった条件が必要ですか？"}]
+}
+
+rag_model = MedallionCardRAGAgentApp()
+rag_model.predict(None, model_input=input_example, params={"id": ["222"]})
 
 # COMMAND ----------
 
@@ -61,7 +276,7 @@ model_config = mlflow.models.ModelConfig(development_config=config_file_name)
 import os
 
 # Specify the full path to the chain notebook
-chain_notebook_path = os.path.join(os.getcwd(), "02-RAG-Chain-App")
+chain_notebook_path = os.path.join(os.getcwd(), "chain.py")
 
 # Specify the full path to the config file (.yaml)
 config_file_path = os.path.join(os.getcwd(), config_file_name)
@@ -89,20 +304,22 @@ with mlflow.start_run(run_name="medallioncard_rag_chatbot"):
   }
 
   output_response = {
-    "id": "chatcmpl-64b2187c10c942819a5a554da07bea34",
-    "object": "chat.completion",
-    "created": 1711339597,
-    "choices": [
-        {
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": "ゴールドランクの場合は・・・",
-            },
-            "finish_reason": "stop",
+    'id': 'chatcmpl_e048d1af-4b9c-4cc9-941f-0311ac5aa7ab',
+    'choices': [
+      {
+        'finish_reason': 'stop', 
+        'index': 0,
+        'logprobs': "",
+        'message': {
+          'content': 'いいえ、現在のランク（シルバー）には空港ラウンジ特典は含まれていません。ゴールドランクに到達すると空港ラウンジ特典が受けられるようになります。',
+          'role': 'assistant'
+          }
         }
-    ],
-    "usage": {"prompt_tokens": 13, "completion_tokens": 1, "total_tokens": 14},
+      ],
+    'created': 1719722525,
+    'model': 'dbrx-instruct-032724',
+    'object': 'chat.completion',
+    'usage': {'completion_tokens': 74, 'prompt_tokens': 803, 'total_tokens': 877}
   }
 
   params={
@@ -149,9 +366,11 @@ uc_model_info = mlflow.register_model(model_uri=logged_chain_info.model_uri, nam
 # COMMAND ----------
 
 ### Test the registered model
-model = mlflow.pyfunc.load_model(f"models:/{model_name}/{uc_model_info.version}")
+registered_agent = mlflow.pyfunc.load_model(f"models:/{model_name}/{uc_model_info.version}")
 
-model.predict({"messages": [{"role": "user", "content": "現在のランクから一つ上のランクに行くためにはどういった条件が必要ですか？"}]}, params={"id":["333"]})
+registered_agent.predict(
+  {"messages": [{"role": "user", "content": "現在のランクから一つ上のランクに行くためにはどういった条件が必要ですか？"}]}, 
+  params={"id":["333"]})
 
 # COMMAND ----------
 
@@ -278,7 +497,7 @@ databricks_token = dbutils.notebook.entry_point.getDbutils().notebook().getConte
 headers = {"Context-Type": "text/json", "Authorization": f"Bearer {databricks_token}"}
 
 response = requests.post(
-    url=f"{host}/serving-endpoints/{deployment_info.endpoint_name}/invocations", json=data, headers=headers
+    url=f"{API_ROOT}/serving-endpoints/{deployment_info.endpoint_name}/invocations", json=data, headers=headers
 )
 
 print(json.dumps(response.json(), ensure_ascii=False))
