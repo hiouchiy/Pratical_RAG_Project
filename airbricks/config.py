@@ -9,38 +9,29 @@
 
 # COMMAND ----------
 
-VECTOR_SEARCH_ENDPOINT_NAME="rag_endpoint"
-
-DATABRICKS_SITEMAP_URL = "https://docs.databricks.com/ja/doc-sitemap.xml"
-
-catalog = "japan_practical_demo"
-dbName = db = "airbricks"
+catalog = "dev"
+dbName = db = "hiroshi_ouchiyama"
 volume = "raw_data"
 raw_data_table_name = "raw_query"
 embed_table_name = "airbricks_documentation"
 registered_model_name = "airbricks_chatbot_model"
 
-embedding_endpoint_name = "YOUR_ENDPOINT_NAME"
-instruct_endpoint_name = "YOUR_ENDPOINT_NAME"
-general_qa_llm_endpoint_name = "YOUR_ENDPOINT_NAME"
-sentence_classification_llm_endpoint_name = "YOUR_ENDPOINT_NAME"
+VECTOR_SEARCH_ENDPOINT_NAME="vs_endpoint"
+embedding_endpoint_name = "multilingual-e5-large-embedding"
+instruct_endpoint_name = "databricks-dbrx-instruct"
 
-databricks_token_secrets_scope = "YOUR_SCOPE_NAME"
-databricks_token_secrets_key = "YOUR_KEY_NAME"
-databricks_host_secrets_scope = "YOUR_SCOPE_NAME"
-databricks_host_secrets_key = "YOUR_KEY_NAME"
-databricks_openai_secrets_scope = "YOUR_SCOPE_NAME"
-databricks_openai_secrets_key = "YOUR_KEY_NAME"
+databricks_token_secrets_scope = "airbricks"
+databricks_token_secrets_key = "databricks_token"
+databricks_host_secrets_scope = "airbricks"
+databricks_host_secrets_key = "databricks_host"
 
 print('VECTOR_SEARCH_ENDPOINT_NAME =',VECTOR_SEARCH_ENDPOINT_NAME)
-print('DATABRICKS_SITEMAP_URL =',DATABRICKS_SITEMAP_URL)
 print('catalog =',catalog)
 print('dbName =',dbName)
 print('volume =',volume)
 print('raw_data_table_name =',raw_data_table_name)
 print('embed_table_name =',embed_table_name)
 print('registered_model_name =',registered_model_name)
-print('user_table_name =',user_table_name)
 print('embed_table_name =',embed_table_name)
 print('embedding_endpoint_name =',embedding_endpoint_name)
 print('instruct_endpoint_name =',instruct_endpoint_name)
