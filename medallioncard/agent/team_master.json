@@ -1,0 +1,28 @@
+{
+  "teams": [
+    {
+      "id": "S0000001",
+      "team_code": "ENT",
+      "team_name": "Enterprise Team",
+      "description": "大企業向け営業を担当"
+    },
+    {
+      "id": "S0000002",
+      "team_code": "MMC",
+      "team_name": "Mid-Market Companies Team",
+      "description": "中堅企業向け営業を担当"
+    },
+    {
+      "id": "S0000003",
+      "team_code": "SMB",
+      "team_name": "Small and Medium Business Team",
+      "description": "中小企業向け営業を担当"
+    },
+    {
+      "id": "S0000004",
+      "team_code": "SUT",
+      "team_name": "Startup Team",
+      "description": "スタートアップ企業向け営業を担当"
+    }
+  ]
+}
