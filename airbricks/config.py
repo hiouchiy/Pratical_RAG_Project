@@ -15,10 +15,11 @@ volume = "raw_data"
 raw_data_table_name = "raw_query"
 embed_table_name = "airbricks_documentation"
 registered_model_name = "airbricks_chatbot_model"
+EVALUATION_SET_FQN = f"`{catalog}`.`{dbName}`.{registered_model_name}_evaluation_set"
 
 VECTOR_SEARCH_ENDPOINT_NAME="vs_endpoint"
 embedding_endpoint_name = "multilingual-e5-large-embedding"
-instruct_endpoint_name = "databricks-dbrx-instruct"
+instruct_endpoint_name = "databricks-meta-llama-3-1-70b-instruct"
 
 databricks_token_secrets_scope = "airbricks"
 databricks_token_secrets_key = "databricks_token"
@@ -33,6 +34,7 @@ print('raw_data_table_name =',raw_data_table_name)
 print('embed_table_name =',embed_table_name)
 print('registered_model_name =',registered_model_name)
 print('embed_table_name =',embed_table_name)
+print('EVALUATION_SET_FQN =',EVALUATION_SET_FQN)
 print('embedding_endpoint_name =',embedding_endpoint_name)
 print('instruct_endpoint_name =',instruct_endpoint_name)
 

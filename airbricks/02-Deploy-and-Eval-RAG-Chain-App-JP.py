@@ -10,7 +10,7 @@
 # MAGIC
 # MAGIC 前回の[01-Data-Preparation-and-Index]($./01-Data-Preparation-and-Index [DO NOT EDIT])ノートブックで、RAGアプリケーションに必要な以下のコンポーネントを準備しました。
 # MAGIC - FAQデータのベクトルインデックス (Embeddingモデル含む)
-# MAGIC - 文章生成LLM（DBRX）のエンドポイント
+# MAGIC - 文章生成LLM（Llama3.1-70B）のエンドポイント
 # MAGIC
 # MAGIC このノートブックでは、Mosaic AI Agent Frameworkを使用して、これらコンポーネントを繋ぎ合わせてユーザーからの質問に適切に回答する RAGエージェント・アプリ（チェーンやオーケストレーターとも呼ばれる）を作成し、それをエンドポイントとしてデプロイします。
 # MAGIC
@@ -18,6 +18,12 @@
 
 # COMMAND ----------
 
+# MAGIC %pip install -U -qqqq databricks-agents mlflow mlflow-skinny databricks-vectorsearch langchain==0.2.11 langchain_core==0.2.23 langchain_community==0.2.10 openai
+# MAGIC dbutils.library.restartPython()
+
+# COMMAND ----------
+
+# DBTITLE 1,バックアップ（使用しません）
 # MAGIC %pip install --quiet -U databricks-agents==0.1.0 mlflow-skinny==2.14.0 mlflow==2.14.0 mlflow[gateway] langchain==0.2.1 langchain_core==0.2.5 langchain_community==0.2.4 databricks-vectorsearch==0.38 databricks-sdk==0.23.0 openai
 # MAGIC dbutils.library.restartPython()
 
@@ -33,6 +39,7 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,バックアップ（使用しません）
 import yaml
 import mlflow
 
@@ -50,183 +57,12 @@ except:
 
 # COMMAND ----------
 
-import os
-
-API_ROOT = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().get()
-os.environ["DATABRICKS_HOST"] = API_ROOT
-API_TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
-os.environ["DATABRICKS_TOKEN"] = API_TOKEN
-
-# COMMAND ----------
-
 # MAGIC %md
-# MAGIC ### RAGエージェントを実装する
+# MAGIC ### RAGエージェントの実装コード
 # MAGIC
-# MAGIC このデモではpyfunc.PythonModelベースの実装をします。
+# MAGIC Langchain、および、pyfunc.PythonModelベースで実装できます。
 # MAGIC
-# MAGIC 実装、および動作確認後、このセルのコードを以下のマジックコマンドを使用して.pyファイルとして書き出します。
-# MAGIC
-# MAGIC %%writefile chain.py
-
-# COMMAND ----------
-
-# %%writefile chain.py
-import os
-
-import pandas as pd
-
-import mlflow
-import mlflow.deployments
-
-from databricks.vector_search.client import VectorSearchClient
-from langchain_core.prompts.chat import HumanMessagePromptTemplate
-from openai import OpenAI
-
-class AirbricksRAGAgentApp(mlflow.pyfunc.PythonModel):
-
-    def __init__(self):
-        """
-        コンストラクタ
-        """
-
-        self.model_config = mlflow.models.ModelConfig(development_config="rag_chain_config.yaml")
-
-        try:
-            # サービングエンドポイントのホストに"DB_MODEL_SERVING_HOST_URL"が自動設定されるので、その内容をDATABRICKS_HOSTにも設定
-            os.environ["DATABRICKS_HOST"] = os.environ["DB_MODEL_SERVING_HOST_URL"]
-        except:
-            pass
-
-        vsc = VectorSearchClient(disable_notice=True)
-        self.vs_index = vsc.get_index(
-            endpoint_name=self.model_config.get("vector_search_endpoint_name"),
-            index_name=self.model_config.get("vector_search_index_name")
-        )
-
-        # 特徴量サービングアクセス用クライアントの取得
-        self.deploy_client = mlflow.deployments.get_deploy_client("databricks")
-
-        # LLM基盤モデルのエンドポイントのクライアントを取得
-        self.chat_model = OpenAI(
-            api_key=os.environ.get("DATABRICKS_TOKEN"),
-            base_url=os.environ.get("DATABRICKS_HOST") + "/serving-endpoints",
-        )
-
-        # システムプロンプトを準備
-        self.SYSTEM_MESSAGE = "【参考情報】のみを参考にしながら【質問】にできるだけ正確に答えてください。わからない場合や、質問が適切でない場合は、分からない旨を答えてください。【参考情報】に記載されていない事実を答えるのはやめてください。"
-
-        # ヒューマンプロンプトテンプレートを準備
-        human_template = """【参考情報】
-{context}
-
-【質問】
-{question}"""
-        self.HUMAN_MESSAGE = HumanMessagePromptTemplate.from_template(human_template)
-
-        
-    def _find_relevant_doc(self, question, num_results = 10, relevant_threshold = 0.7):
-        """
-        ベクター検索インデックスにリクエストを送信し、類似コンテンツを検索
-        """
-
-        results = self.vs_index.similarity_search(
-            query_text=question,
-            columns=["query", "response"],
-            num_results=num_results)
-        
-        docs = results.get('result', {}).get('data_array', [])
-
-        #関連性スコアでフィルタリングします。0.7以下は、関連性の高いコンテンツがないことを意味する
-        returned_docs = []
-        for doc in docs:
-          if doc[-1] > relevant_threshold:
-            returned_docs.append({"query": doc[0], "response": doc[1]})
-
-        return returned_docs
-    
-
-    def _build_prompt(self, docs, question):
-        """
-        プロンプトの構築
-        """
-
-        context = ""
-        for doc in docs:
-          context = context + doc['response'] + "\n\n"
-
-        human_message = self.HUMAN_MESSAGE.format_messages(
-          context=context, 
-          question=question
-        )
-    
-        prompt=[
-            {
-                "role": "system",
-                "content": self.SYSTEM_MESSAGE
-            },
-            {
-                "role": "user",
-                "content": human_message[0].content,
-            }
-        ]
-
-        return prompt
-
-
-    @mlflow.trace(name="predict_rag")
-    def predict(self, context, model_input, params=None):
-        """
-        推論メイン関数
-        """
-
-        if isinstance(model_input, pd.DataFrame):
-            model_input = model_input.to_dict(orient="records")[0]
-
-        # FAQデータからベクター検索を用いて質問と類似している情報を検索
-        with mlflow.start_span(name="_find_relevant_doc") as span:
-            question = model_input["messages"][-1]["content"]
-            docs = self._find_relevant_doc(question)
-            span.set_inputs({"question": question})
-            span.set_outputs({"docs": docs})
-
-        # プロンプトの構築
-        with mlflow.start_span(name="_build_prompt") as span:
-            prompt = self._build_prompt(docs, question)
-            span.set_inputs({"question": question, "docs": docs})
-            span.set_outputs({"prompt": prompt})
-
-        # LLMに回答を生成させる
-        with mlflow.start_span(name="generate_answer") as span:
-            response = self.chat_model.chat.completions.create(
-                model=self.model_config.get("llm_endpoint_name"),
-                messages=prompt,
-                max_tokens=2000,
-                temperature=0.1
-            )
-            span.set_inputs({"question": question, "prompt": prompt})
-            span.set_outputs({"answer": response})
-        
-        
-        # 回答データを整形して返す.
-        # ChatCompletionResponseの形式で返さないと後々エラーとなる。
-        return response.to_dict()
-
-
-mlflow.models.set_model(model=AirbricksRAGAgentApp())
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### RAGエージェントをテストする
-
-# COMMAND ----------
-
-input_example = {
-  "messages": [{"role": "user", "content": "新しいエアコンを選ぶ際に最も重要なことは何ですか？"}]
-}
-
-rag_model = AirbricksRAGAgentApp()
-rag_model.predict(None, model_input=input_example)
+# MAGIC 実装コードは"chain"および"chain_pyfunc"にそれぞれあります。
 
 # COMMAND ----------
 
@@ -238,16 +74,52 @@ rag_model.predict(None, model_input=input_example)
 import os
 
 # Specify the full path to the chain notebook
-chain_notebook_path = os.path.join(os.getcwd(), "chain.py")
+chain_notebook_path = os.path.join(os.getcwd(), "chain")
 
 # Specify the full path to the config file (.yaml)
-config_file_path = os.path.join(os.getcwd(), config_file_name)
+config_file_path = os.path.join(os.getcwd(), "rag_chain_config.yaml")
 
 print(f"Chain notebook path: {chain_notebook_path}")
 print(f"Chain notebook path: {config_file_path}")
 
 # COMMAND ----------
 
+user_account_name = dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get()
+
+# COMMAND ----------
+
+import mlflow
+
+# Set the experiment name
+mlflow.set_experiment(f"/Users/{user_account_name}/airbricks_rag_experiment")
+
+# Log the model to MLflow
+# TODO: remove example_no_conversion once this papercut is fixed
+with mlflow.start_run(run_name="airbricks_rag_chatbot"):
+    # Tag to differentiate from the data pipeline runs
+    mlflow.set_tag("type", "chain")
+
+    input_example = {
+        "messages": [{"role": "user", "content": "Zenith ZR-450のタッチスクリーン操作パネルの反応が鈍いです。どうしたら良いですか？"}]
+    }
+
+    logged_chain_info = mlflow.langchain.log_model(
+        lc_model=chain_notebook_path,  # Chain code file e.g., /path/to/the/chain.py
+        model_config=config_file_path,  # Chain configuration set in 00_config
+        artifact_path="chain",  # Required by MLflow
+        input_example=input_example,  # Save the chain's input schema.  MLflow will execute the chain before logging & capture it's output schema.
+        example_no_conversion=True,  # Required by MLflow to use the input_example as the chain's schema
+    )
+
+    # # Attach the data pipeline's configuration as parameters
+    # mlflow.log_params(_flatten_nested_params({"data_pipeline": data_pipeline_config}))
+
+    # # Attach the data pipeline configuration 
+    # mlflow.log_dict(data_pipeline_config, "data_pipeline_config.json")
+
+# COMMAND ----------
+
+# DBTITLE 1,バックアップ（使用しません）
 import numpy as np
 import pandas as pd
 
@@ -307,6 +179,12 @@ with mlflow.start_run(run_name="airbricks_rag_chatbot"):
 
 # COMMAND ----------
 
+chain = mlflow.langchain.load_model(logged_chain_info.model_uri)
+chain.invoke(input_example)
+
+# COMMAND ----------
+
+# DBTITLE 1,バックアップ（使用しません）
 # Test the chain locally
 chain = mlflow.pyfunc.load_model(logged_chain_info.model_uri)
 chain.predict(input_example)
@@ -323,11 +201,16 @@ uc_model_info = mlflow.register_model(model_uri=logged_chain_info.model_uri, nam
 # COMMAND ----------
 
 ### Test the registered model
+registered_agent = mlflow.langchain.load_model(f"models:/{model_name}/{uc_model_info.version}")
+
+registered_agent.invoke(input_example)
+
+# COMMAND ----------
+
+### Test the registered model
 registered_agent = mlflow.pyfunc.load_model(f"models:/{model_name}/{uc_model_info.version}")
 
-registered_agent.predict(
-  {"messages": [{"role": "user", "content": "新しいエアコンを選ぶ際に最も重要なことは何ですか？"}]}
-)
+registered_agent.predict(input_example)
 
 # COMMAND ----------
 
@@ -342,13 +225,17 @@ registered_agent.predict(
 
 # COMMAND ----------
 
+import os
+import mlflow
 from databricks import agents
+
 deployment_info = agents.deploy(
     model_name, 
-    uc_model_info.version, 
-    environment_vars={
-        "DATABRICKS_TOKEN": "{{secrets/"+databricks_token_secrets_scope+"/"+databricks_token_secrets_key+"}}"
-    })
+    uc_model_info.version 
+)
+
+browser_url = mlflow.utils.databricks_utils.get_browser_hostname()
+print(f"\n\nView deployment status: https://{browser_url}/ml/endpoints/{deployment_info.endpoint_name}")
 
 review_instructions = """### 株式会社エアブリックス FAQチャットボットのテスト手順
 
@@ -368,6 +255,58 @@ review_instructions = """### 株式会社エアブリックス FAQチャット�
 チャットボットの評価にお時間を割いていただき、ありがとうございます。エンドユーザーに高品質の製品をお届けするためには、皆様のご協力が不可欠です。"""
 
 agents.set_review_instructions(model_name, review_instructions)
+
+# COMMAND ----------
+
+# DBTITLE 1,バックアップ（使用しません）
+import os
+import mlflow
+from databricks import agents
+
+deployment_info = agents.deploy(
+    model_name, 
+    uc_model_info.version, 
+    environment_vars={
+        "DATABRICKS_TOKEN": "{{secrets/"+databricks_token_secrets_scope+"/"+databricks_token_secrets_key+"}}"
+    })
+
+browser_url = mlflow.utils.databricks_utils.get_browser_hostname()
+print(f"\n\nView deployment status: https://{browser_url}/ml/endpoints/{deployment_info.endpoint_name}")
+
+review_instructions = """### 株式会社エアブリックス FAQチャットボットのテスト手順
+
+チャットボットの品質向上のためにぜひフィードバックを提供ください。
+
+1. **多様な質問をお試しください**：
+   - 実際のお客様が尋ねると予想される多様な質問を入力ください。これは、予想される質問を効果的に処理できるか否かを確認するのに役立ちます。
+
+2. **回答に対するフィードバック**：
+   - 質問の後、フィードバックウィジェットを使って、チャットボットの回答を評価してください。
+   - 回答が間違っていたり、改善すべき点がある場合は、「回答の編集（Edit Response）」で修正してください。皆様の修正により、アプリケーションの精度を向上できます。
+
+3. **回答に付随している参考文献の確認**：
+   - 質問に対してシステムから回答される各参考文献をご確認ください。
+   - Good👍／Bad👎機能を使って、その文書が質問内容に関連しているかどうかを評価ください。
+
+チャットボットの評価にお時間を割いていただき、ありがとうございます。エンドユーザーに高品質の製品をお届けするためには、皆様のご協力が不可欠です。"""
+
+agents.set_review_instructions(model_name, review_instructions)
+
+# COMMAND ----------
+
+import time
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.serving import EndpointStateReady, EndpointStateConfigUpdate
+from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+
+# Wait for the Review App to be ready
+print("\nWaiting for endpoint to deploy.  This can take 15 - 20 minutes.", end="")
+w = WorkspaceClient()
+while w.serving_endpoints.get(deployment_info.endpoint_name).state.ready == EndpointStateReady.NOT_READY or w.serving_endpoints.get(deployment_info.endpoint_name).state.config_update == EndpointStateConfigUpdate.IN_PROGRESS:
+    print(".", end="")
+    time.sleep(30)
+
+print(f"\n\nReview App: {deployment_info.review_app_url}")
 
 # COMMAND ----------
 
@@ -397,6 +336,8 @@ print(f"Share this URL with your stakeholders: {deployment_info.review_app_url}"
 
 # MAGIC %md
 # MAGIC ### Mosaic AI Agent Evaluation "LLM-as-a-judge" を使用してRAGエージェントの自動評価を行う
+# MAGIC
+# MAGIC 参考：https://docs.databricks.com/en/generative-ai/agent-evaluation/evaluation-set.html
 
 # COMMAND ----------
 
@@ -406,14 +347,47 @@ eval_set  = [
     {
       "request_id": "1",
       "request": "Zenith ZR-450のタッチスクリーン操作パネルの反応が鈍いです。どうしたら良いですか？",
+      "expected_retrieved_context": [
+        {
+            "doc_uri": "https://example.com/1855",
+        }
+      ],
+      "expected_response": "Zenith ZR-450のタッチスクリーンが鈍い場合の具体的な対処法は以下の通りです：\n	1.	画面を清掃してください。\n	2.	改善しない場合は、ファームウェアのアップデートを確認してください。\n	3.	それでも解決しない場合は、サポートセンターに連絡して技術的なサポートを受けてください。\n\nこちらが正しい対応手順となります。"
     },
     {
       "request_id": "2",
       "request": "エアコンを買い換えるタイミングの判断基準は何ですか？",
+      "expected_retrieved_context": [
+        {
+            "doc_uri": "https://example.com/8321",
+        },
+        {
+            "doc_uri": "https://example.com/3029",
+        },
+        {
+            "doc_uri": "https://example.com/3724",
+        },
+        {
+            "doc_uri": "https://example.com/2849",
+        }
+      ],
+      "expected_response": "エアコンを買い換えるタイミングの判断基準は以下の通りです：\n\n	1.	使用年数が10年以上経過した。\n	2.	修理が頻繁に必要になった。\n	3.	電気代が増加し、エネルギー効率が低下している。\n	4.	最新技術や機能を活用したいと考えている場合。"
     },
     {
       "request_id": "3",
       "request": "リビングが３０平米なのですが、どの製品がベスト？",
+      "expected_retrieved_context": [
+        {
+            "doc_uri": "https://example.com/9662",
+        },
+        {
+            "doc_uri": "https://example.com/4609",
+        },
+        {
+            "doc_uri": "https://example.com/1885",
+        }
+      ],
+      "expected_response": "30平米のリビングに適したエアコンとしては、以下の製品が候補となります：\n\n	1.	EcoSmart TY-700:\n	•	冷却能力：7.0 kW\n	•	広い空間に対応可能で、効率的な冷暖房が可能です。\n	2.	Zenith ZR-450:\n	•	冷却能力：4.5 kW\n	•	少し小さめの冷却能力ですが、30平米程度の部屋には十分なパフォーマンスを発揮します。\n\nいずれも、広さに応じた冷却能力を持つため、好みに応じて選択できます。"
     }
 ]
 #### Convert dictionary to a pandas DataFrame
@@ -425,11 +399,13 @@ model_name = f"{catalog}.{dbName}.{registered_model_name}"
 ###
 # mlflow.evaluate() call
 ###
-evaluation_results = mlflow.evaluate(
-    data=eval_set_df,
-    model=f"models:/{model_name}/{uc_model_info.version}",
-    model_type="databricks-agent",
-)
+# with mlflow.start_run(run_id=logged_chain_info.run_id):
+with mlflow.start_run(run_name="new_eval_run"):
+  evaluation_results = mlflow.evaluate(
+      data=eval_set_df,
+      model=f"models:/{model_name}/{uc_model_info.version}",
+      model_type="databricks-agent",
+  )
 
 # COMMAND ----------
 
@@ -446,17 +422,36 @@ import requests
 import json
 
 data = {
-  "messages": [{"role": "user", "content": "エアコンを買い換えるタイミングの判断基準は何ですか？"}]
+  "messages": [{"role": "user", "content": "エアコンの買い換えを決める際の判断基準はありますか？"}]
 }
 
+databricks_host = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().get()
 databricks_token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 headers = {"Context-Type": "text/json", "Authorization": f"Bearer {databricks_token}"}
 
 response = requests.post(
-    url=f"{API_ROOT}/serving-endpoints/{deployment_info.endpoint_name}/invocations", json=data, headers=headers
+    url=f"{databricks_host}/serving-endpoints/{deployment_info.endpoint_name}/invocations", json=data, headers=headers
 )
 
 print(response.json()["choices"][0]["message"]["content"])
+
+# COMMAND ----------
+
+# MAGIC %md ## おまけ：レビューアプリ名を検索
+# MAGIC
+# MAGIC このノートブックの状態を失い、レビューアプリのURLを見つける必要がある場合は、このセルを実行します。
+# MAGIC
+# MAGIC または、レビューアプリのURLを次のように作成することもできます。
+# MAGIC
+# MAGIC `https://<your-workspace-url>/ml/reviews/{UC_CATALOG}.{UC_SCHEMA}.{UC_MODEL_NAME}/{UC_MODEL_VERSION_NUMBER}/instructions`
+
+# COMMAND ----------
+
+active_deployments = agents.list_deployments()
+
+active_deployment = next((item for item in active_deployments if item.model_name == model_name), None)
+
+print(f"Review App URL: {active_deployment.review_app_url}")
 
 # COMMAND ----------
 
