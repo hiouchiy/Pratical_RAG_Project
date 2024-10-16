@@ -1,7 +1,7 @@
 # Databricks notebook source
 # MAGIC %md 
 # MAGIC ### 環境
-# MAGIC - ノードタイプ: サーバーレス
+# MAGIC - ノードタイプ: サーバーレス、または、15.4 ML LTS
 
 # COMMAND ----------
 
@@ -39,7 +39,6 @@
 
 # COMMAND ----------
 
-# DBTITLE 1,バックアップ（使用しません）
 import yaml
 import mlflow
 
@@ -207,6 +206,7 @@ registered_agent.invoke(input_example)
 
 # COMMAND ----------
 
+# DBTITLE 1,バックアップ（使用しません）
 ### Test the registered model
 registered_agent = mlflow.pyfunc.load_model(f"models:/{model_name}/{uc_model_info.version}")
 
